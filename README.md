@@ -42,7 +42,7 @@ job passes your thresholds — applies via Easy Apply automatically.
 | **Job discovery** — mock LinkedIn site + Playwright navigation | ✅ Ready |
 | **HTML parsing** — BeautifulSoup job card & detail extraction | ✅ Ready |
 | **Mock mode** — full discovery pipeline testable with HTML fixtures | ✅ Ready |
-| **Scoring** — embedding similarity + LLM fit evaluation | 🔧 Interface ready (fake + real) |
+| **Scoring** — embedding similarity + LLM fit evaluation + decision logic | ✅ Ready |
 | **Easy Apply** — multi-step form automation via Playwright | 📋 Stubbed |
 | **Daily reports** — Markdown + JSON summaries | 📋 Stubbed |
 | **Challenge detection** — pauses on captcha, never bypasses | 📋 Planned |
@@ -323,10 +323,19 @@ upserts all discovered jobs into the database with status `NEW`.
 Compute fit-scores for discovered jobs against your resume.
 
 ```bash
+# Mock mode (uses fake embedder + evaluator)
+uv run hunt --mock score --profile default
+# ✓ Scored 3 job(s): 2 queued, 0 skipped, 1 review
+
+# Real mode (uses OpenAI embeddings + LLM evaluation)
 uv run hunt score --profile default
 ```
 
-> 📋 *Not yet implemented — stubbed for Phase 3.*
+Iterates all jobs with status `NEW`, computes embedding similarity and LLM fit
+score against your resume, saves `Score` rows, and updates each job's status:
+- **QUEUED** — passes all thresholds and has Easy Apply → ready for application
+- **SKIPPED** — LLM decision is "skip" or poor fit
+- **REVIEW** — borderline, needs human judgment
 
 #### `hunt apply`
 
@@ -522,7 +531,7 @@ uv run pytest tests/test_profile_generation.py -v
 uv run pytest -k "test_upsert" -v
 ```
 
-**Current test suite:** 58 passed, 2 skipped (Phase 4 Easy Apply stubs).
+**Current test suite:** 77 passed, 2 skipped (Phase 4 Easy Apply stubs).
 
 The skipped tests are for the Easy Apply worker (not yet implemented) and will
 be unskipped when Phase 4 is built.
@@ -547,8 +556,8 @@ be unskipped when Phase 4 is built.
 | **Phase 1** | Skeleton + DB + CLI | ✅ Complete |
 | **Phase 1.5** | Profile generation from resume PDF + LinkedIn (URL or PDF) | ✅ Complete |
 | **Phase 2** | Mock LinkedIn site + HTML parser + `hunt discover` | ✅ Complete |
-| **Phase 3** | Matching — embeddings + LLM scoring | 📋 Next |
-| **Phase 4** | Easy Apply worker (mock Playwright) | 📋 Planned |
+| **Phase 3** | Matching — embeddings + LLM scoring + `hunt score` | ✅ Complete |
+| **Phase 4** | Easy Apply worker (mock Playwright) | 📋 Next |
 | **Phase 5** | Real LinkedIn integration | 📋 Planned |
 | **Phase 6** | Orchestration + reporting | 📋 Planned |
 

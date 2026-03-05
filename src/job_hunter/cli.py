@@ -214,8 +214,133 @@ def score(
     profile: Annotated[str, typer.Option("--profile", "-p", help="Search-profile name")] = "default",
 ) -> None:
     """Compute fit-scores for discovered jobs."""
-    _get_state(ctx)
-    raise NotImplementedError("score is not yet implemented")
+    from job_hunter.config.loader import load_user_profile as _load_up
+    from job_hunter.db.models import Job, JobStatus, Score
+    from job_hunter.db.repo import get_engine, get_jobs_by_status, make_session, save_score
+    from job_hunter.matching.embeddings import Embedder, FakeEmbedder, OpenAIEmbedder
+    from job_hunter.matching.llm_eval import FakeLLMEvaluator, LLMEvaluator, OpenAILLMEvaluator
+    from job_hunter.matching.scoring import compute_score, decide_job_status, decision_to_db
+
+    state = _get_state(ctx)
+    settings = state.settings
+
+    # --- Load resume text ---
+    resume_text = ""
+    user_profile_path = settings.data_dir / "user_profile.yml"
+    resume_txt_path = settings.data_dir / "resume.txt"
+
+    if user_profile_path.exists():
+        up = _load_up(user_profile_path)
+        # Build a textual representation of the user profile for scoring
+        resume_text = (
+            f"{up.name}\n{up.title}\n{up.summary}\n"
+            f"Skills: {', '.join(up.skills)}\n"
+            f"Experience: {up.experience_years} years\n"
+            f"Education: {', '.join(up.education)}\n"
+            f"Desired roles: {', '.join(up.desired_roles)}\n"
+        )
+    elif resume_txt_path.exists():
+        resume_text = resume_txt_path.read_text(encoding="utf-8")
+
+    if not resume_text.strip():
+        rprint("[red]✗[/red] No resume data found. Run [bold]hunt profile[/bold] first, or place a resume.txt in the data dir.")
+        raise typer.Exit(1)
+
+    # --- Load search profile thresholds ---
+    profiles_path = settings.data_dir / "profiles.yml"
+    min_fit_score = 75
+    min_similarity = 0.35
+    if profiles_path.exists():
+        from job_hunter.config.loader import load_profiles as _load_profs
+        profs = _load_profs(profiles_path)
+        matching = [p for p in profs if p.name == profile]
+        if matching:
+            min_fit_score = matching[0].min_fit_score
+            min_similarity = matching[0].min_similarity
+
+    # --- Choose embedder + evaluator ---
+    embedder: Embedder
+    evaluator: LLMEvaluator
+
+    if settings.mock:
+        rprint("[bold]Scoring in mock mode[/bold] (using fake embedder + evaluator)")
+        embedder = FakeEmbedder(fixed_similarity=0.5)
+        evaluator = FakeLLMEvaluator(fit_score=80, decision="apply")
+    else:
+        api_key = settings.openai_api_key
+        if not api_key:
+            rprint("[red]✗[/red] JOBHUNTER_OPENAI_API_KEY is not set. Use --mock for testing or export the key.")
+            raise typer.Exit(1)
+        embedder = OpenAIEmbedder(api_key=api_key)
+        evaluator = OpenAILLMEvaluator(api_key=api_key)
+
+    # --- Score all NEW jobs ---
+    engine = get_engine(settings.data_dir)
+    init_db(engine)
+    session = make_session(engine)
+
+    new_jobs = get_jobs_by_status(session, JobStatus.NEW)
+    if not new_jobs:
+        rprint("[yellow]No new jobs to score.[/yellow]")
+        return
+
+    rprint(f"[bold]Scoring {len(new_jobs)} job(s)…[/bold]")
+
+    scored = 0
+    queued = 0
+    skipped = 0
+    review = 0
+
+    for job in new_jobs:
+        result = compute_score(
+            resume_text=resume_text,
+            job_description=job.description_text,
+            embedder=embedder,
+            llm_evaluator=evaluator,
+        )
+
+        # Save score row
+        score_row = Score(
+            job_hash=job.hash,
+            resume_id="default",
+            embedding_similarity=result["embedding_similarity"],
+            llm_fit_score=result["llm_fit_score"],
+            missing_skills=result["missing_skills"],
+            risk_flags=result["risk_flags"],
+            decision=decision_to_db(result["decision"]),
+        )
+        save_score(session, score_row)
+
+        # Update job status
+        new_status = decide_job_status(
+            easy_apply=job.easy_apply,
+            fit_score=result["llm_fit_score"],
+            similarity=result["embedding_similarity"],
+            decision_str=result["decision"],
+            min_fit_score=min_fit_score,
+            min_similarity=min_similarity,
+        )
+        job.status = new_status
+        scored += 1
+
+        if new_status == JobStatus.QUEUED:
+            queued += 1
+        elif new_status == JobStatus.SKIPPED:
+            skipped += 1
+        elif new_status == JobStatus.REVIEW:
+            review += 1
+
+        rprint(
+            f"  {job.title} @ {job.company}: "
+            f"fit={result['llm_fit_score']} sim={result['embedding_similarity']:.2f} "
+            f"→ [bold]{new_status.value}[/bold]"
+        )
+
+    session.commit()
+    rprint(
+        f"\n[green]✓[/green] Scored {scored} job(s): "
+        f"{queued} queued, {skipped} skipped, {review} review"
+    )
 
 
 @app.command()

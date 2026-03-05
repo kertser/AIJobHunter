@@ -2,8 +2,47 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 
+logger = logging.getLogger("job_hunter.matching.llm_eval")
+
+# ---------------------------------------------------------------------------
+# System prompt for job evaluation
+# ---------------------------------------------------------------------------
+
+EVAL_SYSTEM_PROMPT = """\
+You are a job-fit evaluator. You will receive a candidate's resume and a job
+description. Analyse how well the candidate matches the job.
+
+Return ONLY a JSON object with these exact keys:
+
+{
+  "fit_score": <int 0-100>,
+  "missing_skills": [<list of skills the candidate lacks for this role>],
+  "risk_flags": [<list of potential concerns, e.g. "relocation required", "overqualified", "underqualified">],
+  "decision": "<apply|skip|review>"
+}
+
+Scoring guidelines:
+- 85-100: Excellent match — candidate meets nearly all requirements
+- 70-84:  Good match — candidate meets most requirements, minor gaps
+- 50-69:  Partial match — significant skill gaps but transferable experience
+- 0-49:   Poor match — major misalignment
+
+Decision guidelines:
+- "apply": fit_score >= 70 and no critical risk flags
+- "skip": fit_score < 50 or critical risk flags (e.g. wrong country, wrong seniority)
+- "review": everything else — needs human judgment
+
+Return ONLY valid JSON. No markdown, no commentary.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Base class + implementations
+# ---------------------------------------------------------------------------
 
 class LLMEvaluator:
     """Base interface for LLM evaluation providers."""
@@ -21,6 +60,57 @@ class LLMEvaluator:
             }
         """
         raise NotImplementedError
+
+
+class OpenAILLMEvaluator(LLMEvaluator):
+    """Evaluate job fit using the OpenAI Chat Completions API."""
+
+    def __init__(self, api_key: str, model: str = "gpt-4o-mini") -> None:
+        self.api_key = api_key
+        self.model = model
+
+    def evaluate(self, resume: str, job_description: str) -> dict[str, Any]:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self.api_key)
+
+        user_message = (
+            f"=== RESUME ===\n{resume[:4000]}\n\n"
+            f"=== JOB DESCRIPTION ===\n{job_description[:4000]}"
+        )
+
+        logger.info("Requesting LLM job evaluation via %s", self.model)
+        response = client.chat.completions.create(
+            model=self.model,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": EVAL_SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.2,
+        )
+
+        raw = response.choices[0].message.content
+        if raw is None:
+            raise RuntimeError("OpenAI returned an empty response")
+
+        logger.debug("Raw LLM eval response:\n%s", raw)
+        data: dict[str, Any] = json.loads(raw)
+
+        # Validate and normalise
+        data.setdefault("fit_score", 0)
+        data.setdefault("missing_skills", [])
+        data.setdefault("risk_flags", [])
+        data.setdefault("decision", "review")
+
+        # Clamp fit_score
+        data["fit_score"] = max(0, min(100, int(data["fit_score"])))
+
+        # Normalise decision
+        if data["decision"] not in ("apply", "skip", "review"):
+            data["decision"] = "review"
+
+        return data
 
 
 class FakeLLMEvaluator(LLMEvaluator):

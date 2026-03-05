@@ -2,6 +2,23 @@
 
 from __future__ import annotations
 
+import logging
+import math
+
+logger = logging.getLogger("job_hunter.matching.embeddings")
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    if len(a) != len(b):
+        raise ValueError(f"Vector length mismatch: {len(a)} vs {len(b)}")
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
 
 class Embedder:
     """Base interface for embedding providers."""
@@ -11,6 +28,32 @@ class Embedder:
 
     def similarity(self, a: list[float], b: list[float]) -> float:
         raise NotImplementedError
+
+
+class OpenAIEmbedder(Embedder):
+    """Generate embeddings via the OpenAI Embeddings API."""
+
+    def __init__(self, api_key: str, model: str = "text-embedding-3-small") -> None:
+        self.api_key = api_key
+        self.model = model
+
+    def embed(self, text: str) -> list[float]:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self.api_key)
+
+        # Truncate very long texts to stay within token limits
+        truncated = text[:8000]
+
+        logger.debug("Requesting embedding for %d chars via %s", len(truncated), self.model)
+        response = client.embeddings.create(
+            model=self.model,
+            input=truncated,
+        )
+        return response.data[0].embedding
+
+    def similarity(self, a: list[float], b: list[float]) -> float:
+        return cosine_similarity(a, b)
 
 
 class FakeEmbedder(Embedder):
