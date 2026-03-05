@@ -1,0 +1,4 @@
+- Fetch after "more" in profile description.
+- Rearrange the profile description for more compact results
+- Add Profile Editing in GUI
+- Add - /select all for delete in jobs (or other action)

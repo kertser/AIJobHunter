@@ -11,6 +11,7 @@ from rich import print as rprint
 from job_hunter.config.loader import load_profiles, load_settings, load_user_profile, save_profiles, save_user_profile
 from job_hunter.config.models import LogLevel
 from job_hunter.db.repo import get_engine, init_db
+from job_hunter.utils.logging import setup_logging
 
 app = typer.Typer(
     name="hunt",
@@ -51,6 +52,7 @@ def main(
         data_dir=data_dir,
         log_level=log_level,
     )
+    setup_logging(state.settings.log_level.value)
     ctx.ensure_object(dict)
     ctx.obj["state"] = state
 

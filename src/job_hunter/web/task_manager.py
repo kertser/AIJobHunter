@@ -21,19 +21,17 @@ class TaskEvent:
 
 
 class _TaskLogHandler(logging.Handler):
-    """Logging handler that pushes log records into a TaskManager's event queue."""
+    """Logging handler that broadcasts log records as TaskEvents to subscribers."""
 
-    def __init__(self, queue: asyncio.Queue[TaskEvent]) -> None:
+    def __init__(self, manager: "TaskManager") -> None:
         super().__init__(level=logging.INFO)
-        self._queue = queue
+        self._manager = manager
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            self._queue.put_nowait(TaskEvent(
-                type="progress",
-                message=self.format(record),
-            ))
-        except asyncio.QueueFull:
+            event = TaskEvent(type="progress", message=self.format(record))
+            self._manager._broadcast(event)
+        except Exception:
             pass
 
 
@@ -47,10 +45,10 @@ class TaskManager:
     def __init__(self) -> None:
         self._task: asyncio.Task[Any] | None = None
         self._task_name: str = ""
-        self._events: asyncio.Queue[TaskEvent] = asyncio.Queue(maxsize=500)
         self._subscribers: list[asyncio.Queue[TaskEvent]] = []
-        self._log_handler = _TaskLogHandler(self._events)
+        self._log_handler = _TaskLogHandler(self)
         self._result: dict[str, Any] | None = None
+        self._recent_events: list[TaskEvent] = []  # buffered for late subscribers
 
     @property
     def is_running(self) -> bool:
@@ -70,8 +68,7 @@ class TaskManager:
 
         self._task_name = name
         self._result = None
-        self._events = asyncio.Queue(maxsize=500)
-        self._log_handler._queue = self._events
+        self._recent_events = []
 
         # Install log handler on root job_hunter logger
         root_logger = logging.getLogger("job_hunter")
@@ -82,7 +79,8 @@ class TaskManager:
                 self._broadcast(TaskEvent(type="progress", message=f"Starting {name}…"))
                 result = await coro
                 self._result = result if isinstance(result, dict) else {"result": "ok"}
-                self._broadcast(TaskEvent(type="complete", message=f"{name} completed", data=self._result))
+                result_str = ", ".join(f"{k}={v}" for k, v in self._result.items()) if isinstance(self._result, dict) else str(self._result)
+                self._broadcast(TaskEvent(type="complete", message=f"{name} completed: {result_str}", data=self._result))
             except Exception as exc:
                 self._result = {"error": str(exc)}
                 self._broadcast(TaskEvent(type="task_error", message=f"{name} failed: {exc}"))
@@ -100,7 +98,8 @@ class TaskManager:
         return False
 
     def _broadcast(self, event: TaskEvent) -> None:
-        """Push an event to all subscribers."""
+        """Push an event to all subscribers and buffer it for late joiners."""
+        self._recent_events.append(event)
         for q in self._subscribers:
             try:
                 q.put_nowait(event)
@@ -108,10 +107,19 @@ class TaskManager:
                 pass
 
     async def subscribe(self) -> AsyncGenerator[TaskEvent, None]:
-        """Yield events as they arrive. Use in SSE endpoints."""
-        q: asyncio.Queue[TaskEvent] = asyncio.Queue(maxsize=100)
+        """Yield events as they arrive. Use in SSE endpoints.
+
+        Late subscribers receive all buffered events from the current task first.
+        """
+        q: asyncio.Queue[TaskEvent] = asyncio.Queue(maxsize=500)
         self._subscribers.append(q)
         try:
+            # Replay buffered events for late joiners
+            for past_event in list(self._recent_events):
+                yield past_event
+                if past_event.type in ("complete", "task_error"):
+                    return
+
             while True:
                 event = await asyncio.wait_for(q.get(), timeout=30.0)
                 yield event

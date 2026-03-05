@@ -81,19 +81,39 @@ async def fill_form_fields(page: Page, answers: dict[str, str] | None = None) ->
 
 
 async def detect_challenge(page: Page) -> bool:
-    """Return True if a captcha, security challenge, or auth-wall is detected."""
-    # Check multiple challenge selectors
+    """Return True if a visible captcha, security challenge, or auth-wall is detected.
+
+    Only flags *blocking* challenges — hidden/preloaded captcha iframes are ignored.
+    """
+    # Check multiple challenge selectors — only if visible
     for marker in sel.CHALLENGE_MARKERS:
         el = page.locator(marker)
         if await el.count() > 0:
-            logger.warning("Challenge marker found: %s", marker)
-            return True
+            # Check if at least one matching element is actually visible
+            try:
+                visible = await el.first.is_visible()
+            except Exception:
+                visible = False
+            if visible:
+                logger.warning("Visible challenge detected: %s", marker)
+                return True
+            else:
+                logger.debug("Hidden challenge element found (not blocking): %s", marker)
 
     # Also check if we got redirected to auth-wall or login
     url = page.url
-    if any(kw in url for kw in ("/login", "/checkpoint", "/authwall", "challenge")):
+    if any(kw in url for kw in ("/login", "/checkpoint", "/authwall")):
         logger.warning("Redirected to challenge/login URL: %s", url)
         return True
+
+    # Check page title for challenge indicators
+    try:
+        title = await page.title()
+        if title and any(kw in title.lower() for kw in ("security verification", "captcha", "challenge")):
+            logger.warning("Challenge page detected via title: '%s'", title)
+            return True
+    except Exception:
+        pass
 
     return False
 

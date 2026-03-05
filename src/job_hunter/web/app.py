@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from job_hunter.config.models import AppSettings
 from job_hunter.db.repo import get_engine, init_db
+from job_hunter.utils.logging import setup_logging
 from job_hunter.web.task_manager import TaskManager
 
 WEB_DIR = Path(__file__).parent
@@ -24,6 +25,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     if settings is None:
         from job_hunter.config.loader import load_settings
         settings = load_settings()
+
+    # Ensure logging is configured so all job_hunter.* loggers emit at INFO+
+    setup_logging(settings.log_level.value if hasattr(settings.log_level, 'value') else str(settings.log_level))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

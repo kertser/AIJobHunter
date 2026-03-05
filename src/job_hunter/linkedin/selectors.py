@@ -76,11 +76,32 @@ JOB_CARD_LINK = "a.job-card-list__title"
 # Job detail page
 # -------------------------------------------------------------------------
 
+JOB_DETAIL_DESCRIPTION_SELECTORS = [
+    # 2025-2026 LinkedIn
+    "div.jobs-description__content",
+    "div.jobs-description-content__text",
+    "div.show-more-less-html__markup",
+    "article.jobs-description__container",
+    "#job-details",
+    # Scaffold / unified layout
+    "div.jobs-box__html-content",
+    "div.jobs-description",
+    # Generic fallbacks
+    "div[class*='description__text']",
+    "div[class*='description-content']",
+    "section.description",
+]
+JOB_DETAIL_DESCRIPTION = "div.show-more-less-html__markup"
+
 JOB_DETAIL_TITLE_SELECTORS = [
     "h1.t-24",
     "h1.job-details-jobs-unified-top-card__job-title",
     "h1.jobs-unified-top-card__job-title",
     "h2.t-24.t-bold",
+    # Scaffold variants
+    "h1[class*='job-title']",
+    "h1[class*='topcard__title']",
+    "h1",
 ]
 JOB_DETAIL_TITLE = "h1.t-24"
 
@@ -89,23 +110,19 @@ JOB_DETAIL_COMPANY_SELECTORS = [
     "div.job-details-jobs-unified-top-card__company-name a",
     ".jobs-unified-top-card__company-name a",
     ".jobs-unified-top-card__company-name",
+    # Scaffold variants
+    "a[class*='company-name']",
+    "span[class*='company-name']",
 ]
 JOB_DETAIL_COMPANY = "a.topcard__org-name-link"
-
-JOB_DETAIL_DESCRIPTION_SELECTORS = [
-    "div.show-more-less-html__markup",
-    "div.jobs-description-content__text",
-    "div.jobs-description__content",
-    "article.jobs-description__container",
-    "#job-details",
-]
-JOB_DETAIL_DESCRIPTION = "div.show-more-less-html__markup"
 
 EASY_APPLY_BUTTON_SELECTORS = [
     "button.jobs-apply-button",
     "button.jobs-apply-button--top-card",
     "button[aria-label*='Easy Apply']",
     "button.jobs-s-apply",
+    # Fallback: any apply button
+    "button[class*='apply']",
 ]
 EASY_APPLY_BUTTON = "button.jobs-apply-button"
 
@@ -128,12 +145,17 @@ WIZARD_FORM_LABEL = "label"
 APPLY_CONFIRMATION = "div.jobs-easy-apply-confirmation"
 
 # Challenge / captcha detection
+# NOTE: Do NOT include generic selectors like iframe[src*='captcha'] — LinkedIn
+# pages routinely include hidden reCAPTCHA iframes that are never shown to users.
+# Only match elements that indicate a *blocking* challenge.
 CHALLENGE_MARKER = "div#captcha-internal"
 CHALLENGE_MARKERS = [
     "div#captcha-internal",
     "div.challenge-dialog",
     "#captcha-challenge",
-    "iframe[src*='captcha']",
+    # Full-page security check
+    "div.auth-challenge",
+    "div#recaptcha-dialog",
 ]
 
 

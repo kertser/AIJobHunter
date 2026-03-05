@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from job_hunter.config.loader import load_profiles, load_user_profile
 from job_hunter.web.task_manager import TaskManager
+
+logger = logging.getLogger("job_hunter.web.run")
 
 router = APIRouter(tags=["run"])
 
@@ -85,6 +89,14 @@ async def run_discover(request: Request):
     from job_hunter.db.repo import make_session, upsert_job
 
     async def _run():
+        logger.info(
+            "Discover params: mock=%s, headless=%s, keywords=%s, location=%s, "
+            "remote=%s, seniority=%s, cookies=%s",
+            params["mock"], params["headless"],
+            params.get("keywords", []), params.get("location", ""),
+            params.get("remote", False), params.get("seniority"),
+            params["cookies_path"],
+        )
         job_dicts = await discover_jobs(
             profile_name=params["profile_name"],
             mock=params["mock"],
@@ -96,6 +108,9 @@ async def run_discover(request: Request):
             remote=params.get("remote", False),
             seniority=params.get("seniority"),
         )
+        logger.info("Discover returned %d jobs", len(job_dicts))
+        if not job_dicts:
+            logger.warning("No jobs discovered. Check the progress log above for details.")
         session = make_session(engine)
         for jd in job_dicts:
             upsert_job(session, Job(**jd))

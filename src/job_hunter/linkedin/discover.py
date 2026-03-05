@@ -163,6 +163,163 @@ async def _extract_jobs_via_js(page: Any) -> list[dict[str, Any]]:
         return []
 
 
+async def _extract_detail_via_js(page: Any) -> dict[str, Any]:
+    """Extract job detail data from a LinkedIn job detail page using JavaScript.
+
+    LinkedIn's 2025-2026 job detail pages are React SPAs where the content
+    is rendered into dynamic components. CSS selectors change frequently,
+    so this function uses text-based heuristics to find the description.
+    """
+    js_code = """
+    () => {
+        const result = {title: '', company: '', description_text: '', easy_apply: false};
+
+        // --- Title ---
+        // Try specific selectors first, then fall back to first h1
+        const titleSels = [
+            'h1.t-24',
+            'h1.job-details-jobs-unified-top-card__job-title',
+            'h1.jobs-unified-top-card__job-title',
+            'h1[class*="job-title"]',
+            'h1[class*="topcard"]',
+        ];
+        for (const sel of titleSels) {
+            const el = document.querySelector(sel);
+            if (el && el.innerText.trim()) {
+                result.title = el.innerText.trim();
+                break;
+            }
+        }
+        if (!result.title) {
+            const h1 = document.querySelector('h1');
+            if (h1) result.title = h1.innerText.trim();
+        }
+
+        // --- Company ---
+        const companySels = [
+            'div.job-details-jobs-unified-top-card__company-name a',
+            '.jobs-unified-top-card__company-name a',
+            '.jobs-unified-top-card__company-name',
+            'a.topcard__org-name-link',
+            'a[class*="company-name"]',
+            'span[class*="company-name"]',
+        ];
+        for (const sel of companySels) {
+            const el = document.querySelector(sel);
+            if (el && el.innerText.trim()) {
+                result.company = el.innerText.trim();
+                break;
+            }
+        }
+
+        // --- Easy Apply ---
+        const applyBtn = document.querySelector(
+            'button.jobs-apply-button, button[aria-label*="Easy Apply"], ' +
+            'button[class*="apply"]'
+        );
+        if (applyBtn) {
+            const txt = applyBtn.innerText.toLowerCase();
+            result.easy_apply = txt.includes('easy apply') || txt.includes('apply');
+        }
+
+        // --- Description ---
+        // Strategy 1: Find the "About the job" heading and take the next sibling content
+        const allElements = document.querySelectorAll('h2, h3, span, div');
+        for (const el of allElements) {
+            const txt = el.innerText.trim().toLowerCase();
+            if (txt === 'about the job' || txt === 'about this job') {
+                // Walk siblings and parent siblings to find the description block
+                let descEl = el.nextElementSibling;
+                // Sometimes the description is the next sibling
+                if (descEl && descEl.innerText.trim().length > 50) {
+                    result.description_text = descEl.innerText.trim();
+                    break;
+                }
+                // Sometimes we need to go up one level and check next sibling
+                let parent = el.parentElement;
+                if (parent) {
+                    descEl = parent.nextElementSibling;
+                    if (descEl && descEl.innerText.trim().length > 50) {
+                        result.description_text = descEl.innerText.trim();
+                        break;
+                    }
+                }
+                // Try the parent's parent
+                if (parent && parent.parentElement) {
+                    descEl = parent.parentElement.nextElementSibling;
+                    if (descEl && descEl.innerText.trim().length > 50) {
+                        result.description_text = descEl.innerText.trim();
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Strategy 2: Try known CSS selectors
+        if (!result.description_text) {
+            const descSels = [
+                '#job-details',
+                '.jobs-description-content__text',
+                '.show-more-less-html__markup',
+                'article.jobs-description__container',
+                '.jobs-description__content',
+                '.jobs-box__html-content',
+                '.jobs-description',
+            ];
+            for (const sel of descSels) {
+                const el = document.querySelector(sel);
+                if (el && el.innerText.trim().length > 100) {
+                    result.description_text = el.innerText.trim();
+                    break;
+                }
+            }
+        }
+
+        // Strategy 3: Find the section between "About the job" and
+        // "About the company" / "Set alert" by scanning page text
+        if (!result.description_text) {
+            const body = document.body.innerText;
+            const markers = [
+                {start: 'About the job', ends: ['Set alert for similar', 'About the company', 'People you can reach']},
+                {start: 'About this job', ends: ['Set alert for similar', 'About the company', 'People you can reach']},
+            ];
+            for (const m of markers) {
+                const startIdx = body.indexOf(m.start);
+                if (startIdx === -1) continue;
+                const contentStart = startIdx + m.start.length;
+                let endIdx = body.length;
+                for (const end of m.ends) {
+                    const idx = body.indexOf(end, contentStart);
+                    if (idx !== -1 && idx < endIdx) endIdx = idx;
+                }
+                const desc = body.substring(contentStart, endIdx).trim();
+                if (desc.length > 50) {
+                    result.description_text = desc;
+                    break;
+                }
+            }
+        }
+
+        // Clean up: remove "Show more" / "Show less" artifacts
+        if (result.description_text) {
+            result.description_text = result.description_text
+                .replace(/Show more$/i, '')
+                .replace(/Show less$/i, '')
+                .replace(/\\.\\.\\. more$/i, '')
+                .trim();
+        }
+
+        return result;
+    }
+    """
+    try:
+        result = await page.evaluate(js_code)
+        return result if isinstance(result, dict) else {}
+    except Exception as exc:
+        logger.warning("JS detail extraction failed: %s", exc)
+        return {}
+
+
 async def _discover_real(
     *,
     headless: bool = True,
@@ -193,15 +350,19 @@ async def _discover_real(
 
     async with async_playwright() as pw:
         # Prefer real Chrome (channel="chrome") — harder for LinkedIn to fingerprint
-        # than Playwright's bundled Chromium
+        # than Playwright's bundled Chromium.
+        # --disable-blink-features=AutomationControlled hides the automation flag.
+        stealth_args = ["--disable-blink-features=AutomationControlled"]
         try:
             browser = await pw.chromium.launch(
                 headless=headless, slow_mo=slowmo_ms, channel="chrome",
+                args=stealth_args,
             )
             logger.info("Launched Chrome (channel=chrome)")
         except Exception:
             browser = await pw.chromium.launch(
                 headless=headless, slow_mo=slowmo_ms,
+                args=stealth_args,
             )
             logger.info("Launched Chromium (default)")
         context = await session.create_context(browser)
@@ -275,8 +436,22 @@ async def _discover_real(
 
                 # Check for challenge
                 if await detect_challenge(page):
-                    logger.warning("Challenge detected on search page! Stopping discovery.")
-                    break
+                    logger.warning(
+                        "Visible challenge/captcha detected on search page %d. "
+                        "Try running with headless=False (Settings → uncheck Headless) "
+                        "so you can solve the captcha manually.",
+                        page_num + 1,
+                    )
+                    # Save the page for debugging
+                    challenge_html = await page.content()
+                    debug_path = Path(cookies_path).parent / "debug_search_page.html"
+                    debug_path.write_text(challenge_html[:100000], encoding="utf-8")
+                    raise RuntimeError(
+                        "LinkedIn showed a CAPTCHA/challenge on the search page. "
+                        "Go to Settings → uncheck 'Headless' and try again. "
+                        "The browser will open visibly so you can solve the captcha. "
+                        "Alternatively, run 'hunt login' to refresh your session."
+                    )
 
                 # Check if we got redirected to login
                 current_url = page.url
@@ -290,12 +465,15 @@ async def _discover_real(
                 # Parse job cards from the page
                 list_html = await page.content()
 
+                # Always save debug HTML for the first page
+                if page_num == 0:
+                    debug_path = Path(cookies_path).parent / "debug_search_page.html"
+                    debug_path.write_text(list_html[:100000], encoding="utf-8")
+                    logger.info("Saved search page HTML to %s (%d bytes)", debug_path, len(list_html))
+
                 # Check if we got a guest page instead of logged-in results
                 if "d_jobs_guest" in list_html or "public_jobs_nav" in list_html:
                     logger.warning("Search page served as guest despite login verification.")
-                    debug_path = Path(cookies_path).parent / "debug_search_page.html"
-                    debug_path.write_text(list_html[:50000], encoding="utf-8")
-                    logger.info("Saved debug HTML to %s", debug_path)
                     raise RuntimeError(
                         "LinkedIn served a guest page for job search. "
                         "Your session may have been invalidated. Run 'hunt login'. "
@@ -312,17 +490,19 @@ async def _discover_real(
                     logger.info("JS extraction found %d job cards", len(cards))
 
                 if not cards:
-                    # Log page title and a snippet for debugging
-                    title = await page.title()
-                    logger.warning(
-                        "No job cards found on page %d. Page title: '%s', URL: %s. "
-                        "LinkedIn may have changed their DOM structure.",
-                        page_num + 1, title, page.url,
-                    )
-                    # Save debug HTML for inspection
-                    debug_path = Path(cookies_path).parent / "debug_search_page.html"
-                    debug_path.write_text(list_html[:50000], encoding="utf-8")
-                    logger.info("Saved debug HTML to %s", debug_path)
+                    if page_num == 0:
+                        # First page with 0 results is unexpected
+                        title = await page.title()
+                        current_page_url = page.url
+                        logger.warning(
+                            "No job cards found on page 1. Page title: '%s', URL: %s. "
+                            "LinkedIn may have changed their DOM structure. "
+                            "Check debug HTML at data/debug_search_page.html",
+                            title, current_page_url,
+                        )
+                    else:
+                        # Subsequent pages with 0 results = end of results
+                        logger.info("No more job cards on page %d — end of results.", page_num + 1)
                     break
 
                 # Visit each card's detail page
@@ -332,39 +512,63 @@ async def _discover_real(
                         continue
                     seen_ids.add(ext_id)
 
-                    card_url = card.get("url", "")
-                    if not card_url:
-                        continue
-
-                    # Build full URL
-                    if card_url.startswith("/"):
-                        detail_url = f"https://www.linkedin.com{card_url}"
-                    else:
-                        detail_url = card_url
+                    # Build clean detail URL (strip tracking params)
+                    detail_url = f"https://www.linkedin.com/jobs/view/{ext_id}/"
 
                     await rate.wait()
-                    logger.debug("Fetching detail page: %s", detail_url)
+                    logger.info("Fetching detail: %s (%s)", ext_id, card.get("title", "?"))
 
+                    detail: dict[str, Any] = {}
                     try:
-                        await page.goto(detail_url, wait_until="networkidle", timeout=20_000)
-                        await page.wait_for_timeout(2000)
+                        await page.goto(detail_url, wait_until="domcontentloaded", timeout=20_000)
+
+                        # Wait for the page content to render (React SPA)
+                        await page.wait_for_timeout(3000)
+
+                        # Try to wait for a heading or description to appear
+                        try:
+                            await page.wait_for_selector(
+                                "h1, h2, [class*='top-card'], [class*='topcard']",
+                                timeout=8_000,
+                            )
+                        except Exception:
+                            await page.wait_for_timeout(3000)
 
                         if await detect_challenge(page):
                             logger.warning("Challenge detected on detail page! Stopping.")
                             return jobs
 
-                        detail_html = await page.content()
-                        detail = parse_job_detail(detail_html)
+                        # Save first detail page HTML for debugging
+                        if len(seen_ids) <= 1:
+                            detail_html_debug = await page.content()
+                            debug_detail = Path(cookies_path).parent / "debug_detail_page.html"
+                            debug_detail.write_text(detail_html_debug[:200000], encoding="utf-8")
+                            logger.info("Saved detail page HTML to %s", debug_detail)
+
+                        # Extract all job details via JS — this understands LinkedIn's
+                        # 2025-2026 SPA structure where content is in dynamic React components
+                        detail = await _extract_detail_via_js(page)
+
+                        desc_len = len(detail.get("description_text", ""))
+                        logger.info(
+                            "Detail %s: title='%s', company='%s', desc=%d chars, easy_apply=%s",
+                            ext_id,
+                            detail.get("title", ""),
+                            detail.get("company", ""),
+                            desc_len,
+                            detail.get("easy_apply", False),
+                        )
+
+
                     except Exception as exc:
                         logger.warning("Failed to fetch detail for %s: %s", ext_id, exc)
-                        detail = {}
 
                     job_data: dict[str, Any] = {
                         "external_id": ext_id,
                         "url": detail_url,
                         "title": detail.get("title") or card.get("title", ""),
                         "company": detail.get("company") or card.get("company", ""),
-                        "location": card.get("location", ""),
+                        "location": detail.get("location") or card.get("location", ""),
                         "description_text": detail.get("description_text", ""),
                         "easy_apply": detail.get("easy_apply", False),
                         "source": "linkedin",
