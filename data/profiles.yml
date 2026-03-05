@@ -1,0 +1,61 @@
+profiles:
+- name: data-science-ml
+  keywords:
+  - Data Scientist
+  - Machine Learning Engineer
+  - Data Analyst
+  - Python
+  - Machine Learning
+  - Deep Learning
+  location: Israel
+  remote: true
+  seniority:
+  - Senior
+  - Mid-Senior
+  blacklist_companies: []
+  blacklist_titles:
+  - Intern
+  - Junior
+  min_fit_score: 80
+  min_similarity: 0.4
+  max_applications_per_day: 20
+- name: algorithm-development
+  keywords:
+  - Algorithm Developer
+  - Research Scientist
+  - R&D Engineer
+  - Python
+  - Numerical Analysis
+  - Simulation
+  location: Israel
+  remote: true
+  seniority:
+  - Senior
+  - Mid-Senior
+  blacklist_companies: []
+  blacklist_titles:
+  - Intern
+  - Junior
+  min_fit_score: 75
+  min_similarity: 0.35
+  max_applications_per_day: 15
+- name: machine-learning-engineer
+  keywords:
+  - Machine Learning Engineer
+  - Data Engineer
+  - AI Developer
+  - TensorFlow
+  - Keras
+  - PyTorch
+  location: Israel
+  remote: true
+  seniority:
+  - Senior
+  - Mid-Senior
+  blacklist_companies: []
+  blacklist_titles:
+  - Intern
+  - Junior
+  min_fit_score: 78
+  min_similarity: 0.38
+  max_applications_per_day: 25

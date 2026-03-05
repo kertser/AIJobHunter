@@ -1,0 +1,32 @@
+profiles:
+  - name: default
+    keywords:
+      - Python Developer
+      - Backend Engineer
+    location: "Remote"
+    remote: true
+    seniority:
+      - Senior
+      - Mid-Senior
+    blacklist_companies:
+      - SpamCorp
+    blacklist_titles:
+      - Intern
+    min_fit_score: 75
+    min_similarity: 0.35
+    max_applications_per_day: 25
+
+  - name: ml-focused
+    keywords:
+      - Machine Learning Engineer
+      - Data Scientist
+    location: "New York, NY"
+    remote: false
+    seniority:
+      - Senior
+    blacklist_companies: []
+    blacklist_titles: []
+    min_fit_score: 80
+    min_similarity: 0.40
+    max_applications_per_day: 15
+

@@ -1,0 +1,39 @@
+user_profile:
+  name: Mike Kertser
+  title: Head of Physics
+  summary: Highly motivated physicist and algorithm developer with a strong passion
+    for Machine Learning and technological innovations. Seeking opportunities in Data
+    Science and Machine Learning to engage in interesting projects.
+  skills:
+  - Machine Learning
+  - Data Science
+  - Python
+  - MATLAB
+  - Deep Learning
+  - Statistical Modeling
+  - Data Visualization
+  - Computer Vision
+  - Data Engineering
+  - Software Engineering
+  - Git
+  - Docker
+  experience_years: 20
+  preferred_locations:
+  - Israel
+  desired_roles:
+  - Data Scientist
+  - Machine Learning Engineer
+  - Algorithm Developer
+  seniority_level: Senior
+  education:
+  - M.Sc. in Physics (Condensed Matter Physics) - Tel Aviv University
+  - B.Sc. in Physics and Computer Science - Ben-Gurion University of Negev
+  languages:
+  - Python
+  - MATLAB
+  - C++
+  - Pascal
+  - Basic
+  - Russian
+  - English
+  - Hebrew

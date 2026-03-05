@@ -1,0 +1,19 @@
+Senior Python Developer with 8 years of experience.
+
+Skills:
+- Python, FastAPI, Django, Flask
+- PostgreSQL, SQLite, Redis
+- AWS (EC2, S3, Lambda, ECS)
+- Docker, Kubernetes
+- Machine Learning (scikit-learn, PyTorch basics)
+- REST API design
+- Git, CI/CD
+
+Experience:
+- Led backend development for a SaaS platform serving 50k users
+- Built data pipelines processing 10M+ records daily
+- Mentored junior developers and conducted code reviews
+
+Education:
+- M.Sc. Computer Science, University of Technology
+
