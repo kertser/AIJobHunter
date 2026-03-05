@@ -136,6 +136,19 @@ class TestJobs:
         r = client.patch(f"/api/jobs/{h}/status", json={"status": "invalid"})
         assert r.status_code == 400
 
+    def test_delete_job(self, client: TestClient) -> None:
+        h = job_hash(external_id="w2", title="Java Dev", company="Globex")
+        r = client.delete(f"/api/jobs/{h}")
+        assert r.status_code == 200
+        assert r.json()["deleted"] is True
+        # Verify it's gone
+        r2 = client.get(f"/api/jobs/{h}")
+        assert r2.status_code == 404
+
+    def test_delete_job_not_found(self, client: TestClient) -> None:
+        r = client.delete("/api/jobs/nonexistent")
+        assert r.status_code == 404
+
 
 # ---------------------------------------------------------------------------
 # Settings

@@ -48,7 +48,12 @@ async def apply_to_job(
     }
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=headless, slow_mo=slowmo_ms)
+        try:
+            browser = await pw.chromium.launch(
+                headless=headless, slow_mo=slowmo_ms, channel="chrome",
+            )
+        except Exception:
+            browser = await pw.chromium.launch(headless=headless, slow_mo=slowmo_ms)
         page = await browser.new_page()
 
         try:

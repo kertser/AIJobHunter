@@ -42,14 +42,10 @@
   let evtSource = null;
   function startTask(name) {
     const log = document.getElementById('progress-log');
-    log.textContent = 'Starting ' + name + '...\n';
+    log.textContent = 'Starting ' + name + '…\n';
     document.getElementById('task-status').innerHTML = '<kbd>Running: ' + name + '</kbd>';
-    fetch('/api/run/' + name, {method: 'POST'}).then(function(r) {
-      if (r.status === 409) {
-        log.textContent += 'A task is already running.\n';
-        return;
-      }
-    });
+
+    // Connect SSE first so we don't miss early events
     if (evtSource) evtSource.close();
     evtSource = new EventSource('/api/run/status');
     evtSource.addEventListener('progress', function(e) {
@@ -57,16 +53,45 @@
       log.scrollTop = log.scrollHeight;
     });
     evtSource.addEventListener('complete', function(e) {
-      log.textContent += '\nDone: ' + e.data + '\n';
-      document.getElementById('task-status').innerHTML = '<span style="color:green">Done</span>';
+      log.textContent += '\n✅ Done: ' + e.data + '\n';
+      document.getElementById('task-status').innerHTML = '<span style="color:green">✅ Done</span>';
       evtSource.close();
     });
-    evtSource.addEventListener('error', function(e) {
-      if (e.data) log.textContent += '\nERROR: ' + e.data + '\n';
-      document.getElementById('task-status').innerHTML = '<span style="color:red">Error</span>';
+    evtSource.addEventListener('task_error', function(e) {
+      log.textContent += '\n❌ ERROR: ' + e.data + '\n';
+      document.getElementById('task-status').innerHTML = '<span style="color:red">❌ Error</span>';
+      showToast('Task failed! Check the progress log.');
       evtSource.close();
     });
-    evtSource.onerror = function() { evtSource.close(); };
+    evtSource.onerror = function() {
+      // SSE connection lost — don't overwrite if we already got a task_error
+      if (document.getElementById('task-status').innerHTML.indexOf('Error') === -1 &&
+          document.getElementById('task-status').innerHTML.indexOf('Done') === -1) {
+        log.textContent += '\n⚠ Connection lost.\n';
+        document.getElementById('task-status').innerHTML = '<span style="color:orange">Disconnected</span>';
+      }
+      evtSource.close();
+    };
+
+    // Now fire the POST to start the task
+    fetch('/api/run/' + name, {method: 'POST'}).then(function(r) {
+      if (r.status === 409) {
+        log.textContent += '⚠ A task is already running.\n';
+        evtSource.close();
+        return;
+      }
+      if (!r.ok) {
+        r.text().then(function(t) {
+          log.textContent += '❌ Failed to start: ' + t + '\n';
+          document.getElementById('task-status').innerHTML = '<span style="color:red">❌ Failed to start</span>';
+          evtSource.close();
+        });
+      }
+    }).catch(function(err) {
+      log.textContent += '❌ Network error: ' + err + '\n';
+      document.getElementById('task-status').innerHTML = '<span style="color:red">❌ Network error</span>';
+      evtSource.close();
+    });
   }
   fetch('/api/run/task-status').then(function(r){return r.json()}).then(function(s){
     if(s.running) startTask(s.task_name || 'task');

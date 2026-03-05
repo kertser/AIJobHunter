@@ -659,7 +659,7 @@ uv run pytest tests/test_profile_generation.py -v
 uv run pytest -k "test_upsert" -v
 ```
 
-**Current test suite:** 143 passed, 0 skipped.
+**Current test suite:** 145 passed, 0 skipped.
 
 All tests run offline with no API keys or network access required.
 

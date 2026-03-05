@@ -81,7 +81,19 @@ async def fill_form_fields(page: Page, answers: dict[str, str] | None = None) ->
 
 
 async def detect_challenge(page: Page) -> bool:
-    """Return True if a captcha or security challenge is detected on the page."""
-    challenge = page.locator(sel.CHALLENGE_MARKER)
-    return await challenge.count() > 0
+    """Return True if a captcha, security challenge, or auth-wall is detected."""
+    # Check multiple challenge selectors
+    for marker in sel.CHALLENGE_MARKERS:
+        el = page.locator(marker)
+        if await el.count() > 0:
+            logger.warning("Challenge marker found: %s", marker)
+            return True
+
+    # Also check if we got redirected to auth-wall or login
+    url = page.url
+    if any(kw in url for kw in ("/login", "/checkpoint", "/authwall", "challenge")):
+        logger.warning("Redirected to challenge/login URL: %s", url)
+        return True
+
+    return False
 

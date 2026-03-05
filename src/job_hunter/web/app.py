@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -55,6 +56,13 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     # Import and include routers
     from job_hunter.web.routers import dashboard, jobs, profiles, reports, run, settings as settings_router
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        ico_path = STATIC_DIR / "favicon.ico"
+        if ico_path.exists():
+            return FileResponse(str(ico_path), media_type="image/x-icon")
+        return Response(status_code=204)
 
     app.include_router(dashboard.router)
     app.include_router(jobs.router)

@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from job_hunter.db.models import ApplicationAttempt, Job, JobStatus, Score
-from job_hunter.db.repo import get_scores_for_jobs
+from job_hunter.db.repo import delete_job, get_scores_for_jobs
 from job_hunter.web.deps import get_db
 
 router = APIRouter(tags=["jobs"])
@@ -21,15 +21,21 @@ class StatusUpdate(BaseModel):
 
 
 @router.get("/jobs")
-async def jobs_page(request: Request, session: Session = Depends(get_db)):
+async def jobs_page(request: Request, session: Session = Depends(get_db), status: str = ""):
     templates = request.app.state.templates
-    jobs = session.execute(select(Job).order_by(Job.collected_at.desc())).scalars().all()
+    query = select(Job).order_by(Job.collected_at.desc())
+    if status:
+        try:
+            query = query.where(Job.status == JobStatus(status))
+        except ValueError:
+            pass
+    jobs = session.execute(query).scalars().all()
     hashes = [j.hash for j in jobs]
     scores_map = get_scores_for_jobs(session, hashes)
     statuses = [s.value for s in JobStatus]
     return templates.TemplateResponse(request, "jobs.html", {
         "jobs": jobs, "scores_map": scores_map,
-        "statuses": statuses, "current_status": "",
+        "statuses": statuses, "current_status": status,
     })
 
 
@@ -97,4 +103,13 @@ async def update_job_status(job_hash: str, body: StatusUpdate, session: Session 
     job.status = new_status
     session.flush()
     return {"hash": job.hash, "status": job.status.value, "title": job.title}
+
+
+@router.delete("/api/jobs/{job_hash}")
+async def remove_job(job_hash: str, session: Session = Depends(get_db)):
+    deleted = delete_job(session, job_hash)
+    if not deleted:
+        raise HTTPException(404, "Job not found")
+    return {"deleted": True, "hash": job_hash}
+
 

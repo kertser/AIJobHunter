@@ -11,15 +11,11 @@
 </p>
 
 <div style="display: flex; gap: 0.5rem; margin: 1rem 0;">
-  <button class="action-btn" hx-patch="/api/jobs/{{ job.hash }}/status"
-          hx-vals='{"status":"queued"}' hx-swap="none"
-          onclick="showToast('Queued!')">Queue</button>
-  <button class="action-btn secondary" hx-patch="/api/jobs/{{ job.hash }}/status"
-          hx-vals='{"status":"skipped"}' hx-swap="none"
-          onclick="showToast('Skipped')">Skip</button>
-  <button class="action-btn outline" hx-patch="/api/jobs/{{ job.hash }}/status"
-          hx-vals='{"status":"review"}' hx-swap="none"
-          onclick="showToast('Review')">Review</button>
+  <button class="action-btn" onclick="setStatus('{{ job.hash }}', 'queued')">Queue</button>
+  <button class="action-btn secondary" onclick="setStatus('{{ job.hash }}', 'skipped')">Skip</button>
+  <button class="action-btn outline" onclick="setStatus('{{ job.hash }}', 'review')">Review</button>
+  <button class="action-btn outline" style="color: var(--pico-del-color); border-color: var(--pico-del-color);"
+          onclick="deleteJob('{{ job.hash }}')">🗑 Delete</button>
 </div>
 
 {% if scores %}
@@ -63,5 +59,37 @@
   <a href="{{ job.url }}" target="_blank" role="button" class="outline">Open on LinkedIn ↗</a>
   {% endif %}
 </p>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function setStatus(hash, status) {
+  fetch('/api/jobs/' + hash + '/status', {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status: status})
+  }).then(function(r) {
+    if (r.ok) {
+      showToast('Status → ' + status);
+      setTimeout(function() { location.reload(); }, 500);
+    } else {
+      r.text().then(function(t) { showToast('Error: ' + t); });
+    }
+  }).catch(function(e) { showToast('Error: ' + e); });
+}
+
+function deleteJob(hash) {
+  if (!confirm('Delete this job permanently?')) return;
+  fetch('/api/jobs/' + hash, { method: 'DELETE' })
+    .then(function(r) {
+      if (r.ok) {
+        window.location = '/jobs';
+      } else {
+        r.text().then(function(t) { showToast('Delete failed: ' + t); });
+      }
+    })
+    .catch(function(e) { showToast('Delete error: ' + e); });
+}
+</script>
 {% endblock %}
 

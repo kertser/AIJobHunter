@@ -6,7 +6,7 @@
 <div style="display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: end;">
   <label style="margin:0;">
     Status
-    <select id="filter-status" hx-get="/jobs" hx-target="#job-table-body" hx-select="#job-table-body" hx-swap="outerHTML" name="status" style="width: auto;">
+    <select id="filter-status" onchange="window.location='/jobs?status='+this.value" style="width: auto;">
       <option value="">All</option>
       {% for s in statuses %}
       <option value="{{ s }}" {% if current_status == s %}selected{% endif %}>{{ s }}</option>
@@ -31,11 +31,11 @@
   </thead>
   <tbody id="job-table-body">
     {% for job in jobs %}
-    <tr>
+    <tr id="job-row-{{ job.hash }}">
       <td><a href="/api/jobs/{{ job.hash }}">{{ job.title }}</a></td>
       <td>{{ job.company }}</td>
       <td>{{ job.location }}</td>
-      <td><span class="status-badge status-{{ job.status.value }}">{{ job.status.value }}</span></td>
+      <td><span class="status-badge status-{{ job.status.value }}" id="status-{{ job.hash }}">{{ job.status.value }}</span></td>
       <td>
         {% if scores_map.get(job.hash) %}
           {{ scores_map[job.hash].llm_fit_score }}
@@ -49,20 +49,16 @@
       <td>{% if job.easy_apply %}✅{% else %}❌{% endif %}</td>
       <td style="white-space: nowrap;">
         {% if job.status.value != 'queued' %}
-        <button class="action-btn outline" hx-patch="/api/jobs/{{ job.hash }}/status"
-                hx-vals='{"status":"queued"}' hx-swap="none"
-                onclick="showToast('Queued!')">Queue</button>
+        <button class="action-btn outline" onclick="setStatus('{{ job.hash }}', 'queued')">Queue</button>
         {% endif %}
         {% if job.status.value != 'skipped' %}
-        <button class="action-btn outline secondary" hx-patch="/api/jobs/{{ job.hash }}/status"
-                hx-vals='{"status":"skipped"}' hx-swap="none"
-                onclick="showToast('Skipped')">Skip</button>
+        <button class="action-btn outline secondary" onclick="setStatus('{{ job.hash }}', 'skipped')">Skip</button>
         {% endif %}
         {% if job.status.value != 'review' %}
-        <button class="action-btn outline" hx-patch="/api/jobs/{{ job.hash }}/status"
-                hx-vals='{"status":"review"}' hx-swap="none"
-                onclick="showToast('Marked for review')">Review</button>
+        <button class="action-btn outline" onclick="setStatus('{{ job.hash }}', 'review')">Review</button>
         {% endif %}
+        <button class="action-btn outline" style="color: var(--pico-del-color); border-color: var(--pico-del-color);"
+                onclick="deleteJob('{{ job.hash }}')">🗑</button>
       </td>
     </tr>
     {% endfor %}
@@ -74,3 +70,40 @@
 </div>
 {% endblock %}
 
+{% block extra_scripts %}
+<script>
+function setStatus(hash, status) {
+  fetch('/api/jobs/' + hash + '/status', {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status: status})
+  }).then(function(r) {
+    if (r.ok) {
+      var badge = document.getElementById('status-' + hash);
+      if (badge) {
+        badge.textContent = status;
+        badge.className = 'status-badge status-' + status;
+      }
+      showToast('Status → ' + status);
+    } else {
+      r.text().then(function(t) { showToast('Error: ' + t); });
+    }
+  }).catch(function(e) { showToast('Error: ' + e); });
+}
+
+function deleteJob(hash) {
+  if (!confirm('Delete this job permanently?')) return;
+  fetch('/api/jobs/' + hash, { method: 'DELETE' })
+    .then(function(r) {
+      if (r.ok) {
+        var row = document.getElementById('job-row-' + hash);
+        if (row) row.remove();
+        showToast('Job deleted');
+      } else {
+        r.text().then(function(t) { showToast('Delete failed: ' + t); });
+      }
+    })
+    .catch(function(e) { showToast('Delete error: ' + e); });
+}
+</script>
+{% endblock %}

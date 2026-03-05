@@ -85,7 +85,7 @@ class TaskManager:
                 self._broadcast(TaskEvent(type="complete", message=f"{name} completed", data=self._result))
             except Exception as exc:
                 self._result = {"error": str(exc)}
-                self._broadcast(TaskEvent(type="error", message=f"{name} failed: {exc}"))
+                self._broadcast(TaskEvent(type="task_error", message=f"{name} failed: {exc}"))
                 logger.error("Task %s failed: %s", name, exc)
             finally:
                 root_logger.removeHandler(self._log_handler)
@@ -115,7 +115,7 @@ class TaskManager:
             while True:
                 event = await asyncio.wait_for(q.get(), timeout=30.0)
                 yield event
-                if event.type in ("complete", "error"):
+                if event.type in ("complete", "task_error"):
                     break
         except asyncio.TimeoutError:
             yield TaskEvent(type="ping", message="keepalive")

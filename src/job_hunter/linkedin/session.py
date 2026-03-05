@@ -51,7 +51,12 @@ class LinkedInSession:
         from playwright.async_api import async_playwright
 
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=headless, slow_mo=slowmo_ms)
+            try:
+                browser = await pw.chromium.launch(
+                    headless=headless, slow_mo=slowmo_ms, channel="chrome",
+                )
+            except Exception:
+                browser = await pw.chromium.launch(headless=headless, slow_mo=slowmo_ms)
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 900},
                 locale="en-US",
@@ -127,6 +132,22 @@ class LinkedInSession:
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
         )
+
+        # Stealth: mask automation indicators so LinkedIn doesn't serve guest pages
+        await context.add_init_script("""
+            // Override navigator.webdriver — Playwright sets it to true
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+            // Mask automation-related properties
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+
+            // Chrome runtime stub
+            window.chrome = { runtime: {} };
+        """)
+
         await context.add_cookies(cookies)
         logger.info("Browser context created with %d cookies", len(cookies))
         return context

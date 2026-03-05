@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from job_hunter.config.loader import load_profiles, load_user_profile
-from job_hunter.web.deps import get_settings, get_task_manager
 from job_hunter.web.task_manager import TaskManager
 
 router = APIRouter(tags=["run"])
@@ -24,6 +21,7 @@ def _load_run_params(settings) -> dict:
         "slowmo_ms": settings.slowmo_ms,
         "data_dir": settings.data_dir,
         "openai_api_key": settings.openai_api_key,
+        "cookies_path": str(settings.data_dir / "cookies.json"),
     }
 
     # Load search profile defaults
@@ -76,6 +74,7 @@ async def run_page(request: Request):
 async def run_discover(request: Request):
     tm: TaskManager = request.app.state.task_manager
     settings = request.app.state.settings
+    engine = request.app.state.engine
     if tm.is_running:
         return JSONResponse({"error": "A task is already running"}, status_code=409)
 
@@ -83,7 +82,7 @@ async def run_discover(request: Request):
 
     from job_hunter.linkedin.discover import discover_jobs
     from job_hunter.db.models import Job
-    from job_hunter.db.repo import get_engine, init_db, make_session, upsert_job
+    from job_hunter.db.repo import make_session, upsert_job
 
     async def _run():
         job_dicts = await discover_jobs(
@@ -91,17 +90,17 @@ async def run_discover(request: Request):
             mock=params["mock"],
             headless=params["headless"],
             slowmo_ms=params["slowmo_ms"],
+            cookies_path=params["cookies_path"],
             keywords=params.get("keywords", []),
             location=params.get("location", ""),
             remote=params.get("remote", False),
             seniority=params.get("seniority"),
         )
-        engine = get_engine(params["data_dir"])
-        init_db(engine)
         session = make_session(engine)
         for jd in job_dicts:
             upsert_job(session, Job(**jd))
         session.commit()
+        session.close()
         return {"discovered": len(job_dicts)}
 
     tm.start_task("discover", _run())
@@ -112,35 +111,44 @@ async def run_discover(request: Request):
 async def run_score(request: Request):
     tm: TaskManager = request.app.state.task_manager
     settings = request.app.state.settings
+    engine = request.app.state.engine
     if tm.is_running:
         return JSONResponse({"error": "A task is already running"}, status_code=409)
 
     params = _load_run_params(settings)
 
     from job_hunter.db.models import JobStatus, Score
-    from job_hunter.db.repo import get_engine, get_jobs_by_status, init_db, make_session, save_score
+    from job_hunter.db.repo import get_jobs_by_status, make_session, save_score
     from job_hunter.matching.embeddings import FakeEmbedder, OpenAIEmbedder
     from job_hunter.matching.llm_eval import FakeLLMEvaluator, OpenAILLMEvaluator
     from job_hunter.matching.scoring import compute_score, decide_job_status, decision_to_db
 
     async def _run():
-        engine = get_engine(params["data_dir"])
-        init_db(engine)
         session = make_session(engine)
 
         if params["mock"]:
             embedder = FakeEmbedder(fixed_similarity=0.5)
             evaluator = FakeLLMEvaluator(fit_score=80, decision="apply")
         else:
-            embedder = OpenAIEmbedder(api_key=params["openai_api_key"])
-            evaluator = OpenAILLMEvaluator(api_key=params["openai_api_key"])
+            api_key = params["openai_api_key"]
+            if not api_key:
+                raise ValueError(
+                    "OpenAI API key not set. Go to Settings and enter your key, "
+                    "or set JOBHUNTER_OPENAI_API_KEY environment variable."
+                )
+            embedder = OpenAIEmbedder(api_key=api_key)
+            evaluator = OpenAILLMEvaluator(api_key=api_key)
 
         new_jobs = get_jobs_by_status(session, JobStatus.NEW)
+        if not new_jobs:
+            session.close()
+            return {"scored": 0, "message": "No NEW jobs to score"}
+
         scored = 0
         for job in new_jobs:
             result = compute_score(
                 resume_text=params.get("resume_text", ""),
-                job_description=job.description_text,
+                job_description=job.description_text or "",
                 embedder=embedder, llm_evaluator=evaluator,
             )
             score_row = Score(
@@ -157,6 +165,7 @@ async def run_score(request: Request):
             )
             scored += 1
         session.commit()
+        session.close()
         return {"scored": scored}
 
     tm.start_task("score", _run())
@@ -167,6 +176,7 @@ async def run_score(request: Request):
 async def run_apply(request: Request):
     tm: TaskManager = request.app.state.task_manager
     settings = request.app.state.settings
+    engine = request.app.state.engine
     if tm.is_running:
         return JSONResponse({"error": "A task is already running"}, status_code=409)
 
@@ -174,13 +184,10 @@ async def run_apply(request: Request):
 
     async def _run():
         from job_hunter.db.models import ApplicationAttempt, ApplicationResult, JobStatus
-        from job_hunter.db.repo import get_engine, get_jobs_by_status, init_db, make_session, save_attempt
+        from job_hunter.db.repo import get_jobs_by_status, make_session, save_attempt
         from job_hunter.linkedin.apply import apply_to_job
         from job_hunter.linkedin.mock_site import MockLinkedInServer
-        from job_hunter.orchestration.policies import can_apply_today
 
-        engine = get_engine(params["data_dir"])
-        init_db(engine)
         session = make_session(engine)
         queued = get_jobs_by_status(session, JobStatus.QUEUED)
         applied = 0
@@ -213,6 +220,7 @@ async def run_apply(request: Request):
                     break
             session.commit()
         finally:
+            session.close()
             if mock_server:
                 mock_server.stop()
         return {"applied": applied}

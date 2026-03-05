@@ -164,3 +164,29 @@ def save_attempt(session: Session, attempt: ApplicationAttempt) -> ApplicationAt
     return attempt
 
 
+def delete_job(session: Session, job_hash: str) -> bool:
+    """Delete a job and its related scores and application attempts.
+
+    Returns True if the job existed and was deleted.
+    """
+    job = session.execute(select(Job).where(Job.hash == job_hash)).scalar_one_or_none()
+    if not job:
+        return False
+
+    # Delete related scores
+    scores = session.execute(select(Score).where(Score.job_hash == job_hash)).scalars().all()
+    for s in scores:
+        session.delete(s)
+
+    # Delete related attempts
+    attempts = session.execute(
+        select(ApplicationAttempt).where(ApplicationAttempt.job_hash == job_hash)
+    ).scalars().all()
+    for a in attempts:
+        session.delete(a)
+
+    session.delete(job)
+    session.flush()
+    return True
+
+
