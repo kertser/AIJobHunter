@@ -39,10 +39,11 @@ job passes your thresholds — applies via Easy Apply automatically.
 | **LinkedIn profile scraping** — fetch public profile via Playwright | ✅ Ready |
 | **Database** — SQLite with Job, Score, ApplicationAttempt tracking | ✅ Ready |
 | **CLI** — `hunt` command with 7 subcommands and global flags | ✅ Ready |
+| **Job discovery** — mock LinkedIn site + Playwright navigation | ✅ Ready |
+| **HTML parsing** — BeautifulSoup job card & detail extraction | ✅ Ready |
+| **Mock mode** — full discovery pipeline testable with HTML fixtures | ✅ Ready |
 | **Scoring** — embedding similarity + LLM fit evaluation | 🔧 Interface ready (fake + real) |
-| **Job discovery** — LinkedIn search result scraping | 📋 Stubbed |
 | **Easy Apply** — multi-step form automation via Playwright | 📋 Stubbed |
-| **Mock mode** — full pipeline testable with HTML fixtures, no internet | 📋 Stubbed |
 | **Daily reports** — Markdown + JSON summaries | 📋 Stubbed |
 | **Challenge detection** — pauses on captcha, never bypasses | 📋 Planned |
 
@@ -306,10 +307,16 @@ uv run hunt profile --show
 Discover fresh LinkedIn jobs for a search profile.
 
 ```bash
+# Mock mode (uses local HTML fixtures — no LinkedIn account needed)
 uv run hunt --mock discover --profile default
+# ✓ Discovered 3 job(s) and saved to database
+
+# Real mode (not yet implemented — Phase 5)
+uv run hunt --real discover --profile default
 ```
 
-> 📋 *Not yet implemented — stubbed for Phase 2.*
+Navigates the job list page, parses each card, visits every detail page, and
+upserts all discovered jobs into the database with status `NEW`.
 
 #### `hunt score`
 
@@ -515,17 +522,21 @@ uv run pytest tests/test_profile_generation.py -v
 uv run pytest -k "test_upsert" -v
 ```
 
-**Current test suite:** 42 passed, 5 skipped (future phases).
+**Current test suite:** 58 passed, 2 skipped (Phase 4 Easy Apply stubs).
 
-The skipped tests are for features not yet implemented (discovery, parsing, Easy
-Apply flow) and will be unskipped as those phases are built.
+The skipped tests are for the Easy Apply worker (not yet implemented) and will
+be unskipped when Phase 4 is built.
 
 ### Test architecture
 
 - **No network calls** — all tests use `FakeEmbedder`, `FakeLLMEvaluator`,
-  `FakeProfileGenerator`, and in-memory SQLite.
+  `FakeProfileGenerator`, in-memory SQLite, and a local mock HTTP server.
+- **Mock discovery tests** spin up a lightweight HTTP server serving HTML fixtures
+  and use Playwright to navigate them — same as real discovery but offline.
 - **PDF tests** create tiny PDFs on-the-fly using PyMuPDF.
 - **YAML round-trip tests** verify save → load produces identical data.
+- **DB integration tests** verify discover → upsert → query round-trips and
+  idempotent re-discovery.
 
 ---
 
@@ -535,8 +546,8 @@ Apply flow) and will be unskipped as those phases are built.
 |---|---|---|
 | **Phase 1** | Skeleton + DB + CLI | ✅ Complete |
 | **Phase 1.5** | Profile generation from resume PDF + LinkedIn (URL or PDF) | ✅ Complete |
-| **Phase 2** | Mock LinkedIn site + HTML parser | 📋 Planned |
-| **Phase 3** | Matching — embeddings + LLM scoring | 📋 Planned |
+| **Phase 2** | Mock LinkedIn site + HTML parser + `hunt discover` | ✅ Complete |
+| **Phase 3** | Matching — embeddings + LLM scoring | 📋 Next |
 | **Phase 4** | Easy Apply worker (mock Playwright) | 📋 Planned |
 | **Phase 5** | Real LinkedIn integration | 📋 Planned |
 | **Phase 6** | Orchestration + reporting | 📋 Planned |

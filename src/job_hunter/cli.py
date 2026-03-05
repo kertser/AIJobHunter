@@ -169,8 +169,43 @@ def discover(
     profile: Annotated[str, typer.Option("--profile", "-p", help="Search-profile name")] = "default",
 ) -> None:
     """Discover fresh LinkedIn jobs for *profile*."""
-    _get_state(ctx)
-    raise NotImplementedError("discover is not yet implemented")
+    import asyncio
+
+    from job_hunter.db.models import Job
+    from job_hunter.db.repo import get_engine, make_session, upsert_job
+    from job_hunter.linkedin.discover import discover_jobs
+
+    state = _get_state(ctx)
+    settings = state.settings
+
+    rprint(f"[bold]Discovering jobs[/bold] (profile={profile}, mock={settings.mock})")
+
+    job_dicts = asyncio.run(
+        discover_jobs(
+            profile_name=profile,
+            mock=settings.mock,
+            headless=settings.headless,
+            slowmo_ms=settings.slowmo_ms,
+        )
+    )
+
+    if not job_dicts:
+        rprint("[yellow]No jobs discovered.[/yellow]")
+        return
+
+    # Persist to DB
+    engine = get_engine(settings.data_dir)
+    init_db(engine)
+    session = make_session(engine)
+
+    new_count = 0
+    for jd in job_dicts:
+        job = Job(**jd)
+        upsert_job(session, job)
+        new_count += 1
+
+    session.commit()
+    rprint(f"[green]✓[/green] Discovered {new_count} job(s) and saved to database")
 
 
 @app.command()
