@@ -18,6 +18,14 @@ _ROUTES: dict[str, str] = {
     "/jobs/view/mock-001": "job_detail.html",
     "/jobs/view/mock-002": "job_detail_002.html",
     "/jobs/view/mock-003": "job_detail_003.html",
+    # Easy Apply wizard
+    "/easy-apply/mock-001/step1": "easy_apply_step1.html",
+    "/easy-apply/step1": "easy_apply_step1.html",
+    "/easy-apply/step2": "easy_apply_step2_questions.html",
+    "/easy-apply/step3": "easy_apply_step3_review.html",
+    "/easy-apply/success": "easy_apply_success.html",
+    # Challenge page
+    "/challenge": "challenge.html",
 }
 
 
@@ -32,6 +40,17 @@ class _MockHandler(SimpleHTTPRequestHandler):
         # Strip query string for matching
         clean_path = self.path.split("?")[0].rstrip("/")
         fixture = _ROUTES.get(clean_path)
+
+        # Prefix-based routing for easy-apply wizard (any job ID)
+        if fixture is None and clean_path.startswith("/easy-apply/") and "/step" in clean_path:
+            # e.g. /easy-apply/mock-002/step1 → step1
+            step = clean_path.rsplit("/", 1)[-1]
+            step_map = {
+                "step1": "easy_apply_step1.html",
+                "step2": "easy_apply_step2_questions.html",
+                "step3": "easy_apply_step3_review.html",
+            }
+            fixture = step_map.get(step)
 
         if fixture is not None:
             fixture_path = self._fixtures_dir / fixture

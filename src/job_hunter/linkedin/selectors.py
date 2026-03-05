@@ -18,11 +18,19 @@ JOB_DETAIL_DESCRIPTION = "div.show-more-less-html__markup"
 EASY_APPLY_BUTTON = "button.jobs-apply-button"
 
 # Easy Apply wizard
+WIZARD_MODAL = "div.jobs-easy-apply-modal"
 WIZARD_NEXT = "button[aria-label='Continue to next step']"
 WIZARD_REVIEW = "button[aria-label='Review your application']"
 WIZARD_SUBMIT = "button[aria-label='Submit application']"
 WIZARD_CLOSE = "button[aria-label='Dismiss']"
 WIZARD_RESUME_INPUT = "input[type='file']"
+WIZARD_TEXT_INPUT = "div.jobs-easy-apply-form-section input[type='text']"
+WIZARD_SELECT = "div.jobs-easy-apply-form-section select"
+WIZARD_FORM_SECTION = "div.jobs-easy-apply-form-section"
+WIZARD_FORM_LABEL = "label"
+
+# Success confirmation
+APPLY_CONFIRMATION = "div.jobs-easy-apply-confirmation"
 
 # Challenge / captcha detection
 CHALLENGE_MARKER = "div#captcha-internal"

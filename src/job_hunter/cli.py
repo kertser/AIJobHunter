@@ -349,8 +349,140 @@ def apply(
     profile: Annotated[str, typer.Option("--profile", "-p", help="Search-profile name")] = "default",
 ) -> None:
     """Apply to qualified jobs via Easy Apply."""
-    _get_state(ctx)
-    raise NotImplementedError("apply is not yet implemented")
+    import asyncio
+
+    from job_hunter.db.models import ApplicationAttempt, ApplicationResult, Job, JobStatus
+    from job_hunter.db.repo import get_engine, get_jobs_by_status, make_session, save_attempt
+    from job_hunter.linkedin.apply import apply_to_job
+    from job_hunter.orchestration.policies import can_apply_today
+
+    state = _get_state(ctx)
+    settings = state.settings
+
+    # Load daily cap from profile
+    max_per_day = 25
+    profiles_path = settings.data_dir / "profiles.yml"
+    if profiles_path.exists():
+        profs = load_profiles(profiles_path)
+        matching = [p for p in profs if p.name == profile]
+        if matching:
+            max_per_day = matching[0].max_applications_per_day
+
+    # Determine resume path
+    resume_path = settings.data_dir / "resume.pdf"
+    if not resume_path.exists():
+        # Fall back to the test fixture for mock mode
+        resume_path = Path("tests/fixtures/resume.txt")
+
+    engine = get_engine(settings.data_dir)
+    init_db(engine)
+    session = make_session(engine)
+
+    queued_jobs = get_jobs_by_status(session, JobStatus.QUEUED)
+    if not queued_jobs:
+        rprint("[yellow]No queued jobs to apply to.[/yellow]")
+        return
+
+    rprint(
+        f"[bold]Applying to {len(queued_jobs)} job(s)[/bold] "
+        f"(mock={settings.mock}, dry_run={settings.dry_run}, max/day={max_per_day})"
+    )
+
+    applied = 0
+    dry_runs = 0
+    failed = 0
+    blocked = 0
+    applied_today = 0  # TODO: count from DB for today
+
+    for job in queued_jobs:
+        if not can_apply_today(applied_today=applied_today, max_per_day=max_per_day):
+            rprint(f"[yellow]Daily cap reached ({max_per_day}). Stopping.[/yellow]")
+            break
+
+        # Build the job URL
+        if settings.mock:
+            from job_hunter.linkedin.mock_site import MockLinkedInServer
+            server = MockLinkedInServer()
+            base_url = server.start()
+            job_url = f"{base_url}{job.url}"
+        else:
+            job_url = job.url
+
+        try:
+            rprint(f"  Applying: {job.title} @ {job.company} …")
+
+            result = asyncio.run(
+                apply_to_job(
+                    job_url=job_url,
+                    resume_path=str(resume_path),
+                    dry_run=settings.dry_run,
+                    headless=settings.headless,
+                    slowmo_ms=settings.slowmo_ms,
+                    mock=settings.mock,
+                )
+            )
+
+            # Map result string to DB enum
+            result_map = {
+                "success": ApplicationResult.SUCCESS,
+                "dry_run": ApplicationResult.DRY_RUN,
+                "failed": ApplicationResult.FAILED,
+                "blocked": ApplicationResult.BLOCKED,
+            }
+            db_result = result_map.get(result["result"], ApplicationResult.FAILED)
+
+            # Save attempt
+            attempt = ApplicationAttempt(
+                job_hash=job.hash,
+                started_at=result.get("started_at"),
+                ended_at=result.get("ended_at"),
+                result=db_result,
+                failure_stage=result.get("failure_stage"),
+                form_answers_json=result.get("form_answers", {}),
+            )
+            save_attempt(session, attempt)
+
+            # Update job status
+            status_map = {
+                "success": JobStatus.APPLIED,
+                "dry_run": JobStatus.APPLIED,
+                "failed": JobStatus.FAILED,
+                "blocked": JobStatus.BLOCKED,
+            }
+            job.status = status_map.get(result["result"], JobStatus.FAILED)
+
+            if result["result"] == "success":
+                applied += 1
+                applied_today += 1
+            elif result["result"] == "dry_run":
+                dry_runs += 1
+            elif result["result"] == "blocked":
+                blocked += 1
+                rprint(f"    [red]BLOCKED[/red] — challenge detected, stopping.")
+                session.commit()
+                break
+            else:
+                failed += 1
+
+            rprint(f"    → [bold]{result['result']}[/bold]")
+
+        finally:
+            if settings.mock:
+                server.stop()
+
+    session.commit()
+
+    parts = []
+    if applied:
+        parts.append(f"{applied} applied")
+    if dry_runs:
+        parts.append(f"{dry_runs} dry-run")
+    if failed:
+        parts.append(f"{failed} failed")
+    if blocked:
+        parts.append(f"{blocked} blocked")
+
+    rprint(f"\n[green]✓[/green] Done: {', '.join(parts) or 'nothing to do'}")
 
 
 @app.command()

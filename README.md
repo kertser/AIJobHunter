@@ -43,9 +43,9 @@ job passes your thresholds — applies via Easy Apply automatically.
 | **HTML parsing** — BeautifulSoup job card & detail extraction | ✅ Ready |
 | **Mock mode** — full discovery pipeline testable with HTML fixtures | ✅ Ready |
 | **Scoring** — embedding similarity + LLM fit evaluation + decision logic | ✅ Ready |
-| **Easy Apply** — multi-step form automation via Playwright | 📋 Stubbed |
+| **Easy Apply** — multi-step wizard automation via Playwright | ✅ Ready |
+| **Challenge detection** — pauses on captcha, marks job BLOCKED | ✅ Ready |
 | **Daily reports** — Markdown + JSON summaries | 📋 Stubbed |
-| **Challenge detection** — pauses on captcha, never bypasses | 📋 Planned |
 
 ---
 
@@ -342,10 +342,31 @@ score against your resume, saves `Score` rows, and updates each job's status:
 Apply to qualified jobs via Easy Apply.
 
 ```bash
+# Dry-run mode (navigates the wizard but doesn't click Submit)
+uv run hunt --mock --dry-run apply --profile default
+# ✓ Done: 2 dry-run
+
+# Real apply in mock mode
+uv run hunt --mock apply --profile default
+# ✓ Done: 2 applied
+
+# Real LinkedIn (not yet implemented — Phase 5)
 uv run hunt --dry-run apply --profile default
 ```
 
-> 📋 *Not yet implemented — stubbed for Phase 4.*
+Iterates all jobs with status `QUEUED`, runs the Easy Apply wizard for each:
+1. Navigates to job detail page
+2. Clicks "Easy Apply" button
+3. Uploads resume
+4. Fills form questions (text inputs, dropdowns)
+5. Reviews and submits (or stops at review in `--dry-run` mode)
+
+Job status is updated to:
+- **APPLIED** — submission successful (or dry-run completed)
+- **FAILED** — wizard step failed (e.g. no Easy Apply button)
+- **BLOCKED** — captcha/challenge detected → bot stops immediately
+
+Respects the `max_applications_per_day` cap from the search profile.
 
 #### `hunt run`
 
@@ -531,10 +552,9 @@ uv run pytest tests/test_profile_generation.py -v
 uv run pytest -k "test_upsert" -v
 ```
 
-**Current test suite:** 77 passed, 2 skipped (Phase 4 Easy Apply stubs).
+**Current test suite:** 84 passed, 0 skipped.
 
-The skipped tests are for the Easy Apply worker (not yet implemented) and will
-be unskipped when Phase 4 is built.
+All tests run offline with no API keys or network access required.
 
 ### Test architecture
 
@@ -542,6 +562,9 @@ be unskipped when Phase 4 is built.
   `FakeProfileGenerator`, in-memory SQLite, and a local mock HTTP server.
 - **Mock discovery tests** spin up a lightweight HTTP server serving HTML fixtures
   and use Playwright to navigate them — same as real discovery but offline.
+- **Easy Apply tests** navigate the full 3-step wizard (resume upload → questions
+  → review → submit) against mock fixtures, covering success, dry-run, no Easy
+  Apply button, and captcha/challenge detection.
 - **PDF tests** create tiny PDFs on-the-fly using PyMuPDF.
 - **YAML round-trip tests** verify save → load produces identical data.
 - **DB integration tests** verify discover → upsert → query round-trips and
@@ -557,9 +580,10 @@ be unskipped when Phase 4 is built.
 | **Phase 1.5** | Profile generation from resume PDF + LinkedIn (URL or PDF) | ✅ Complete |
 | **Phase 2** | Mock LinkedIn site + HTML parser + `hunt discover` | ✅ Complete |
 | **Phase 3** | Matching — embeddings + LLM scoring + `hunt score` | ✅ Complete |
-| **Phase 4** | Easy Apply worker (mock Playwright) | 📋 Next |
-| **Phase 5** | Real LinkedIn integration | 📋 Planned |
+| **Phase 4** | Easy Apply worker (mock Playwright) + `hunt apply` | ✅ Complete |
+| **Phase 5** | Real LinkedIn integration | 📋 Next |
 | **Phase 6** | Orchestration + reporting | 📋 Planned |
+| **Phase 7** | Web GUI dashboard (FastAPI + HTMX) | 📋 Planned |
 
 ---
 
