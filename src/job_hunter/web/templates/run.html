@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Run — AI Job Hunter{% endblock %}
+{% block content %}
+<h2>Run Controls</h2>
+
+<div class="cards-grid" style="margin-bottom: 2rem;">
+  <div class="card" style="text-align: center;">
+    <h4>Discover</h4>
+    <p style="font-size: 0.85rem; color: var(--pico-muted-color);">Find new LinkedIn jobs</p>
+    <button onclick="startTask('discover')">&#9654; Discover</button>
+  </div>
+  <div class="card" style="text-align: center;">
+    <h4>Score</h4>
+    <p style="font-size: 0.85rem; color: var(--pico-muted-color);">Score new jobs vs resume</p>
+    <button onclick="startTask('score')">&#9654; Score</button>
+  </div>
+  <div class="card" style="text-align: center;">
+    <h4>Apply</h4>
+    <p style="font-size: 0.85rem; color: var(--pico-muted-color);">Apply to queued jobs</p>
+    <button onclick="startTask('apply')">&#9654; Apply</button>
+  </div>
+  <div class="card" style="text-align: center;">
+    <h4>Full Pipeline</h4>
+    <p style="font-size: 0.85rem; color: var(--pico-muted-color);">Discover, Score, Apply, Report</p>
+    <button onclick="startTask('pipeline')" class="contrast">&#9654; Run All</button>
+  </div>
+</div>
+
+<h3>Progress</h3>
+<div id="task-status" style="margin-bottom: 0.5rem;">
+  {% if task_status.running %}
+    <kbd>Running: {{ task_status.task_name }}</kbd>
+  {% else %}
+    <span style="color: var(--pico-muted-color);">No task running.</span>
+  {% endif %}
+</div>
+<div id="progress-log">Waiting for task...</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  let evtSource = null;
+  function startTask(name) {
+    const log = document.getElementById('progress-log');
+    log.textContent = 'Starting ' + name + '...\n';
+    document.getElementById('task-status').innerHTML = '<kbd>Running: ' + name + '</kbd>';
+    fetch('/api/run/' + name, {method: 'POST'}).then(function(r) {
+      if (r.status === 409) {
+        log.textContent += 'A task is already running.\n';
+        return;
+      }
+    });
+    if (evtSource) evtSource.close();
+    evtSource = new EventSource('/api/run/status');
+    evtSource.addEventListener('progress', function(e) {
+      log.textContent += e.data + '\n';
+      log.scrollTop = log.scrollHeight;
+    });
+    evtSource.addEventListener('complete', function(e) {
+      log.textContent += '\nDone: ' + e.data + '\n';
+      document.getElementById('task-status').innerHTML = '<span style="color:green">Done</span>';
+      evtSource.close();
+    });
+    evtSource.addEventListener('error', function(e) {
+      if (e.data) log.textContent += '\nERROR: ' + e.data + '\n';
+      document.getElementById('task-status').innerHTML = '<span style="color:red">Error</span>';
+      evtSource.close();
+    });
+    evtSource.onerror = function() { evtSource.close(); };
+  }
+  fetch('/api/run/task-status').then(function(r){return r.json()}).then(function(s){
+    if(s.running) startTask(s.task_name || 'task');
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,67 @@
+"""FastAPI application factory for the AI Job Hunter web GUI."""
+
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from job_hunter.config.models import AppSettings
+from job_hunter.db.repo import get_engine, init_db
+from job_hunter.web.task_manager import TaskManager
+
+WEB_DIR = Path(__file__).parent
+TEMPLATES_DIR = WEB_DIR / "templates"
+STATIC_DIR = WEB_DIR / "static"
+
+
+def create_app(settings: AppSettings | None = None) -> FastAPI:
+    """Build and configure the FastAPI application."""
+    if settings is None:
+        from job_hunter.config.loader import load_settings
+        settings = load_settings()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Startup — use pre-injected engine if available (for tests)
+        if not hasattr(app.state, "engine") or app.state.engine is None:
+            engine = get_engine(settings.data_dir)
+            init_db(engine)
+            app.state.engine = engine
+            owns_engine = True
+        else:
+            owns_engine = False
+        app.state.settings = settings
+        if not hasattr(app.state, "task_manager") or app.state.task_manager is None:
+            app.state.task_manager = TaskManager()
+        app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+        yield
+        # Shutdown
+        if owns_engine:
+            app.state.engine.dispose()
+
+    app = FastAPI(
+        title="AI Job Hunter",
+        description="Web GUI for AI Job Hunter",
+        lifespan=lifespan,
+    )
+
+    # Static files
+    if STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # Import and include routers
+    from job_hunter.web.routers import dashboard, jobs, profiles, reports, run, settings as settings_router
+
+    app.include_router(dashboard.router)
+    app.include_router(jobs.router)
+    app.include_router(profiles.router)
+    app.include_router(run.router)
+    app.include_router(reports.router)
+    app.include_router(settings_router.router)
+
+    return app
+

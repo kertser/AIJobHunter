@@ -77,6 +77,31 @@ def init(ctx: typer.Context) -> None:
 
 
 @app.command()
+def login(ctx: typer.Context) -> None:
+    """Open a browser for manual LinkedIn login and save cookies."""
+    import asyncio
+
+    from job_hunter.linkedin.session import LinkedInSession
+
+    state = _get_state(ctx)
+    cookies_path = state.settings.data_dir / "cookies.json"
+
+    session = LinkedInSession(cookies_path=cookies_path)
+
+    rprint("[bold]Opening browser for LinkedIn login…[/bold]")
+    rprint("Please log in manually. The browser will close automatically once login is detected.")
+
+    asyncio.run(
+        session.login(
+            headless=False,  # Always visible for manual login
+            slowmo_ms=state.settings.slowmo_ms,
+        )
+    )
+
+    rprint(f"[green]✓[/green] Cookies saved to {cookies_path}")
+
+
+@app.command()
 def profile(
     ctx: typer.Context,
     resume: Annotated[Optional[Path], typer.Option("--resume", "-r", help="Path to resume PDF", exists=True, dir_okay=False)] = None,
@@ -180,12 +205,32 @@ def discover(
 
     rprint(f"[bold]Discovering jobs[/bold] (profile={profile}, mock={settings.mock})")
 
+    # Load search profile params for real discovery
+    keywords: list[str] = []
+    location = ""
+    remote = False
+    seniority: list[str] = []
+    profiles_path = settings.data_dir / "profiles.yml"
+    if profiles_path.exists():
+        profs = load_profiles(profiles_path)
+        matching = [p for p in profs if p.name == profile]
+        if matching:
+            keywords = matching[0].keywords
+            location = matching[0].location
+            remote = matching[0].remote
+            seniority = matching[0].seniority
+
     job_dicts = asyncio.run(
         discover_jobs(
             profile_name=profile,
             mock=settings.mock,
             headless=settings.headless,
             slowmo_ms=settings.slowmo_ms,
+            cookies_path=str(settings.data_dir / "cookies.json"),
+            keywords=keywords,
+            location=location,
+            remote=remote,
+            seniority=seniority,
         )
     )
 
@@ -491,8 +536,92 @@ def run(
     profile: Annotated[str, typer.Option("--profile", "-p", help="Search-profile name")] = "default",
 ) -> None:
     """Run the full pipeline: discover → score → apply → report."""
-    _get_state(ctx)
-    raise NotImplementedError("run is not yet implemented")
+    import asyncio
+
+    from job_hunter.orchestration.pipeline import run_pipeline
+
+    state = _get_state(ctx)
+    settings = state.settings
+
+    # Load profile thresholds
+    min_fit_score = 75
+    min_similarity = 0.35
+    max_per_day = 25
+    blacklist_companies: list[str] = []
+    blacklist_titles: list[str] = []
+    keywords: list[str] = []
+    location = ""
+    remote = False
+    seniority: list[str] = []
+    profiles_path = settings.data_dir / "profiles.yml"
+    if profiles_path.exists():
+        profs = load_profiles(profiles_path)
+        matching = [p for p in profs if p.name == profile]
+        if matching:
+            min_fit_score = matching[0].min_fit_score
+            min_similarity = matching[0].min_similarity
+            max_per_day = matching[0].max_applications_per_day
+            blacklist_companies = matching[0].blacklist_companies
+            blacklist_titles = matching[0].blacklist_titles
+            keywords = matching[0].keywords
+            location = matching[0].location
+            remote = matching[0].remote
+            seniority = matching[0].seniority
+
+    # Load resume text
+    resume_text = ""
+    user_profile_path = settings.data_dir / "user_profile.yml"
+    if user_profile_path.exists():
+        up = load_user_profile(user_profile_path)
+        resume_text = (
+            f"{up.name}\n{up.title}\n{up.summary}\n"
+            f"Skills: {', '.join(up.skills)}\n"
+            f"Experience: {up.experience_years} years\n"
+            f"Education: {', '.join(up.education)}\n"
+            f"Desired roles: {', '.join(up.desired_roles)}\n"
+        )
+
+    resume_path = str(settings.data_dir / "resume.pdf")
+    if not Path(resume_path).exists():
+        resume_path = "tests/fixtures/resume.txt"
+
+    rprint(f"[bold]Running full pipeline[/bold] (profile={profile}, mock={settings.mock}, dry_run={settings.dry_run})")
+
+    summary = asyncio.run(
+        run_pipeline(
+            profile_name=profile,
+            mock=settings.mock,
+            dry_run=settings.dry_run,
+            headless=settings.headless,
+            slowmo_ms=settings.slowmo_ms,
+            data_dir=settings.data_dir,
+            openai_api_key=settings.openai_api_key,
+            min_fit_score=min_fit_score,
+            min_similarity=min_similarity,
+            max_applications_per_day=max_per_day,
+            blacklist_companies=blacklist_companies,
+            blacklist_titles=blacklist_titles,
+            resume_text=resume_text,
+            resume_path=resume_path,
+            keywords=keywords,
+            location=location,
+            remote=remote,
+            seniority=seniority,
+        )
+    )
+
+    rprint("\n[bold cyan]Pipeline Summary[/bold cyan]")
+    rprint(f"  Discovered: {summary['discovered']}")
+    rprint(f"  Scored:     {summary['scored']}")
+    rprint(f"  Queued:     {summary['queued']}")
+    rprint(f"  Applied:    {summary['applied']}")
+    rprint(f"  Dry-run:    {summary['dry_run']}")
+    rprint(f"  Skipped:    {summary['skipped']}")
+    rprint(f"  Review:     {summary['review']}")
+    rprint(f"  Failed:     {summary['failed']}")
+    rprint(f"  Blocked:    {summary['blocked']}")
+    if summary.get("report_md_path"):
+        rprint(f"\n[green]✓[/green] Report saved to {summary['report_md_path']}")
 
 
 @app.command()
@@ -501,6 +630,54 @@ def report(
     date: Annotated[Optional[str], typer.Option("--date", help="Report date (YYYY-MM-DD)")] = None,
 ) -> None:
     """Generate a daily report."""
-    _get_state(ctx)
-    raise NotImplementedError("report is not yet implemented")
+    from job_hunter.db.repo import get_engine, make_session
+    from job_hunter.reporting.report import generate_report
+
+    state = _get_state(ctx)
+    settings = state.settings
+
+    engine = get_engine(settings.data_dir)
+    init_db(engine)
+    session = make_session(engine)
+
+    summary = generate_report(session=session, data_dir=settings.data_dir, date=date)
+
+    rprint(f"\n[bold cyan]Report for {summary['date']}[/bold cyan]")
+    rprint(f"  Total jobs: {summary['total_jobs']}")
+
+    status_counts = summary.get("status_counts", {})
+    for status, count in status_counts.items():
+        rprint(f"  {status.capitalize()}: {count}")
+
+    top_skills = summary.get("top_missing_skills", [])
+    if top_skills:
+        rprint("\n  [bold]Top missing skills:[/bold]")
+        for item in top_skills:
+            rprint(f"    - {item['skill']} ({item['count']})")
+
+    rprint(f"\n[green]✓[/green] Markdown: {summary.get('md_path')}")
+    rprint(f"[green]✓[/green] JSON:     {summary.get('json_path')}")
+
+
+@app.command()
+def serve(
+    ctx: typer.Context,
+    host: Annotated[str, typer.Option("--host", help="Bind host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Bind port")] = 8000,
+    reload: Annotated[bool, typer.Option("--reload", help="Auto-reload on code changes")] = False,
+) -> None:
+    """Start the web GUI server."""
+    import uvicorn
+
+    from job_hunter.web.app import create_app
+
+    state = _get_state(ctx)
+    settings = state.settings
+
+    rprint(f"[bold]Starting web server[/bold] at http://{host}:{port}")
+    rprint(f"  mock={settings.mock}, dry_run={settings.dry_run}")
+
+    web_app = create_app(settings)
+    uvicorn.run(web_app, host=host, port=port, log_level="info")
+
 

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Jobs — AI Job Hunter{% endblock %}
+{% block content %}
+<h2>Jobs</h2>
+
+<div style="display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: end;">
+  <label style="margin:0;">
+    Status
+    <select id="filter-status" hx-get="/jobs" hx-target="#job-table-body" hx-select="#job-table-body" hx-swap="outerHTML" name="status" style="width: auto;">
+      <option value="">All</option>
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if current_status == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</div>
+
+<div style="overflow-x: auto;">
+<table>
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Company</th>
+      <th>Location</th>
+      <th>Status</th>
+      <th>Fit</th>
+      <th>Sim</th>
+      <th>Easy Apply</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody id="job-table-body">
+    {% for job in jobs %}
+    <tr>
+      <td><a href="/api/jobs/{{ job.hash }}">{{ job.title }}</a></td>
+      <td>{{ job.company }}</td>
+      <td>{{ job.location }}</td>
+      <td><span class="status-badge status-{{ job.status.value }}">{{ job.status.value }}</span></td>
+      <td>
+        {% if scores_map.get(job.hash) %}
+          {{ scores_map[job.hash].llm_fit_score }}
+        {% else %}—{% endif %}
+      </td>
+      <td>
+        {% if scores_map.get(job.hash) %}
+          {{ "%.2f"|format(scores_map[job.hash].embedding_similarity) }}
+        {% else %}—{% endif %}
+      </td>
+      <td>{% if job.easy_apply %}✅{% else %}❌{% endif %}</td>
+      <td style="white-space: nowrap;">
+        {% if job.status.value != 'queued' %}
+        <button class="action-btn outline" hx-patch="/api/jobs/{{ job.hash }}/status"
+                hx-vals='{"status":"queued"}' hx-swap="none"
+                onclick="showToast('Queued!')">Queue</button>
+        {% endif %}
+        {% if job.status.value != 'skipped' %}
+        <button class="action-btn outline secondary" hx-patch="/api/jobs/{{ job.hash }}/status"
+                hx-vals='{"status":"skipped"}' hx-swap="none"
+                onclick="showToast('Skipped')">Skip</button>
+        {% endif %}
+        {% if job.status.value != 'review' %}
+        <button class="action-btn outline" hx-patch="/api/jobs/{{ job.hash }}/status"
+                hx-vals='{"status":"review"}' hx-swap="none"
+                onclick="showToast('Marked for review')">Review</button>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    {% if not jobs %}
+    <tr><td colspan="8" style="text-align:center; color: var(--pico-muted-color);">No jobs found.</td></tr>
+    {% endif %}
+  </tbody>
+</table>
+</div>
+{% endblock %}
+

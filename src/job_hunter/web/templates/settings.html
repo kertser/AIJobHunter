@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Settings — AI Job Hunter{% endblock %}
+{% block content %}
+<h2>Settings</h2>
+
+<form id="settings-form">
+  <div class="grid">
+    <label>
+      <input type="checkbox" name="mock" role="switch" {% if settings.mock %}checked{% endif %}>
+      Mock Mode
+    </label>
+    <label>
+      <input type="checkbox" name="dry_run" role="switch" {% if settings.dry_run %}checked{% endif %}>
+      Dry Run
+    </label>
+    <label>
+      <input type="checkbox" name="headless" role="switch" {% if settings.headless %}checked{% endif %}>
+      Headless Browser
+    </label>
+  </div>
+
+  <div class="grid">
+    <label>
+      Slow-Mo (ms)
+      <input type="number" name="slowmo_ms" value="{{ settings.slowmo_ms }}" min="0" step="100">
+    </label>
+    <label>
+      Log Level
+      <select name="log_level">
+        {% for lvl in ['DEBUG', 'INFO', 'WARNING', 'ERROR'] %}
+        <option value="{{ lvl }}" {% if settings.log_level.value == lvl %}selected{% endif %}>{{ lvl }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <label>
+    OpenAI API Key
+    <input type="password" name="openai_api_key" placeholder="{{ api_key_masked }}">
+    <small>Leave blank to keep current key. Current: {{ api_key_masked }}</small>
+  </label>
+
+  <label>
+    Data Directory
+    <input type="text" value="{{ settings.data_dir }}" disabled>
+    <small>Cannot be changed at runtime.</small>
+  </label>
+
+  <button type="submit">Save Settings</button>
+</form>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  document.getElementById('settings-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const fd = new FormData(this);
+    const body = {
+      mock: fd.has('mock'),
+      dry_run: fd.has('dry_run'),
+      headless: fd.has('headless'),
+      slowmo_ms: parseInt(fd.get('slowmo_ms')) || 0,
+      log_level: fd.get('log_level'),
+    };
+    const key = fd.get('openai_api_key');
+    if (key && key.trim()) body.openai_api_key = key.trim();
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    }).then(r => r.json()).then(() => showToast('Settings saved!'));
+  });
+</script>
+{% endblock %}
+

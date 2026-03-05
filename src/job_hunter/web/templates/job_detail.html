@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} — AI Job Hunter{% endblock %}
+{% block content %}
+<nav aria-label="breadcrumb"><ul><li><a href="/jobs">Jobs</a></li><li>{{ job.title }}</li></ul></nav>
+
+<h2>{{ job.title }}</h2>
+<p><strong>{{ job.company }}</strong> · {{ job.location }}</p>
+<p>
+  <span class="status-badge status-{{ job.status.value }}">{{ job.status.value }}</span>
+  {% if job.easy_apply %}<kbd>Easy Apply</kbd>{% endif %}
+</p>
+
+<div style="display: flex; gap: 0.5rem; margin: 1rem 0;">
+  <button class="action-btn" hx-patch="/api/jobs/{{ job.hash }}/status"
+          hx-vals='{"status":"queued"}' hx-swap="none"
+          onclick="showToast('Queued!')">Queue</button>
+  <button class="action-btn secondary" hx-patch="/api/jobs/{{ job.hash }}/status"
+          hx-vals='{"status":"skipped"}' hx-swap="none"
+          onclick="showToast('Skipped')">Skip</button>
+  <button class="action-btn outline" hx-patch="/api/jobs/{{ job.hash }}/status"
+          hx-vals='{"status":"review"}' hx-swap="none"
+          onclick="showToast('Review')">Review</button>
+</div>
+
+{% if scores %}
+<h3>Score</h3>
+{% for s in scores %}
+<div class="card" style="margin-bottom: 1rem;">
+  <p><strong>Fit Score:</strong> {{ s.llm_fit_score }}/100 &nbsp;
+     <strong>Similarity:</strong> {{ "%.3f"|format(s.embedding_similarity) }} &nbsp;
+     <strong>Decision:</strong> <span class="status-badge status-{{ s.decision.value }}">{{ s.decision.value }}</span></p>
+  {% if s.missing_skills %}
+  <p><strong>Missing Skills:</strong> {{ s.missing_skills | join(', ') }}</p>
+  {% endif %}
+  {% if s.risk_flags %}
+  <p><strong>Risk Flags:</strong> {{ s.risk_flags | join(', ') }}</p>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+<h3>Description</h3>
+<div class="card" style="white-space: pre-wrap;">{{ job.description_text or 'No description available.' }}</div>
+
+{% if attempts %}
+<h3 style="margin-top: 2rem;">Application Attempts</h3>
+<table>
+  <thead><tr><th>Started</th><th>Result</th><th>Failure Stage</th></tr></thead>
+  <tbody>
+    {% for a in attempts %}
+    <tr>
+      <td>{{ a.started_at }}</td>
+      <td><span class="status-badge status-{{ a.result.value if a.result else 'new' }}">{{ a.result.value if a.result else '—' }}</span></td>
+      <td>{{ a.failure_stage or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<p style="margin-top: 2rem;">
+  {% if job.url.startswith('http') %}
+  <a href="{{ job.url }}" target="_blank" role="button" class="outline">Open on LinkedIn ↗</a>
+  {% endif %}
+</p>
+{% endblock %}
+

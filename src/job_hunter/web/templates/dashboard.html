@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — AI Job Hunter{% endblock %}
+{% block content %}
+<h2>Dashboard</h2>
+
+<div class="cards-grid">
+  <div class="card">
+    <p class="stat-number">{{ total_jobs }}</p>
+    <p class="stat-label">Total Jobs</p>
+  </div>
+  <div class="card">
+    <p class="stat-number">{{ status_counts.get('new', 0) }}</p>
+    <p class="stat-label">New</p>
+  </div>
+  <div class="card">
+    <p class="stat-number">{{ status_counts.get('queued', 0) }}</p>
+    <p class="stat-label">Queued</p>
+  </div>
+  <div class="card">
+    <p class="stat-number">{{ status_counts.get('applied', 0) }}</p>
+    <p class="stat-label">Applied</p>
+  </div>
+  <div class="card">
+    <p class="stat-number">{{ status_counts.get('review', 0) }}</p>
+    <p class="stat-label">Review</p>
+  </div>
+  <div class="card">
+    <p class="stat-number">{{ status_counts.get('skipped', 0) }}</p>
+    <p class="stat-label">Skipped</p>
+  </div>
+  <div class="card">
+    <p class="stat-number">{{ status_counts.get('blocked', 0) }}</p>
+    <p class="stat-label">Blocked</p>
+  </div>
+  <div class="card">
+    <p class="stat-number">{{ applied_today }}</p>
+    <p class="stat-label">Applied Today</p>
+  </div>
+</div>
+
+{% if top_missing_skills %}
+<h3 style="margin-top: 2rem;">Top Missing Skills</h3>
+<table>
+  <thead><tr><th>Skill</th><th>Count</th></tr></thead>
+  <tbody>
+    {% for item in top_missing_skills %}
+    <tr><td>{{ item.skill }}</td><td>{{ item.count }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<div style="margin-top: 2rem;">
+  <h3>Quick Actions</h3>
+  <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+    <a href="/run" role="button">Run Pipeline</a>
+    <a href="/jobs" role="button" class="outline">View Jobs</a>
+    <a href="/reports" role="button" class="secondary">Reports</a>
+  </div>
+</div>
+{% endblock %}
