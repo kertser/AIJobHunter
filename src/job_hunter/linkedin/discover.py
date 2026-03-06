@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from job_hunter.linkedin.parse import parse_job_cards, parse_job_detail
-from job_hunter.matching.description_cleaner import clean_description_rules
+from job_hunter.matching.description_cleaner import clean_description_llm, clean_description_rules
 from job_hunter.utils.hashing import job_hash
 
 logger = logging.getLogger("job_hunter.linkedin.discover")
@@ -25,6 +25,7 @@ async def discover_jobs(
     remote: bool = False,
     seniority: list[str] | None = None,
     max_pages: int = 10,
+    openai_api_key: str = "",
 ) -> list[dict[str, Any]]:
     """Discover jobs matching the given profile.
 
@@ -47,6 +48,7 @@ async def discover_jobs(
         remote=remote,
         seniority=seniority,
         max_pages=max_pages,
+        openai_api_key=openai_api_key,
     )
 
 
@@ -216,160 +218,118 @@ async def _expand_all_show_more(page: Any) -> None:
 async def _extract_detail_via_js(page: Any) -> dict[str, Any]:
     """Extract job detail data from a LinkedIn job detail page using JavaScript.
 
-    LinkedIn's 2025-2026 job detail pages are React SPAs where the content
-    is rendered into dynamic components. CSS selectors change frequently,
-    so this function uses text-based heuristics to find the description.
+    LinkedIn's 2026 job detail pages use obfuscated CSS class names (hash-based
+    CSS modules) and React SPA rendering. Traditional CSS selectors break
+    constantly, so this uses:
+    - <title> tag parsing for title + company
+    - data-testid attributes for description
+    - Text boundary extraction as fallback
+    - Full-page text scan for Easy Apply
     """
     js_code = """
     () => {
         const result = {title: '', company: '', description_text: '', easy_apply: false};
 
-        // --- Title ---
-        // Try specific selectors first, then fall back to first h1
-        const titleSels = [
-            'h1.t-24',
-            'h1.job-details-jobs-unified-top-card__job-title',
-            'h1.jobs-unified-top-card__job-title',
-            'h1[class*="job-title"]',
-            'h1[class*="topcard"]',
-        ];
-        for (const sel of titleSels) {
-            const el = document.querySelector(sel);
-            if (el && el.innerText.trim()) {
-                result.title = el.innerText.trim();
-                break;
-            }
-        }
-        if (!result.title) {
-            const h1 = document.querySelector('h1');
-            if (h1) result.title = h1.innerText.trim();
+        // === TITLE + COMPANY from <title> tag ===
+        // LinkedIn format: "Job Title | Company Name | LinkedIn"
+        const pageTitle = document.title || '';
+        const titleParts = pageTitle.split('|').map(s => s.trim());
+        if (titleParts.length >= 3) {
+            result.title = titleParts[0];
+            result.company = titleParts[1];
+        } else if (titleParts.length === 2) {
+            result.title = titleParts[0];
         }
 
-        // --- Company ---
-        const companySels = [
-            'div.job-details-jobs-unified-top-card__company-name a',
-            '.jobs-unified-top-card__company-name a',
-            '.jobs-unified-top-card__company-name',
-            'a.topcard__org-name-link',
-            'a[class*="company-name"]',
-            'span[class*="company-name"]',
-        ];
-        for (const sel of companySels) {
-            const el = document.querySelector(sel);
-            if (el && el.innerText.trim()) {
-                result.company = el.innerText.trim();
-                break;
-            }
-        }
-
-        // --- Easy Apply ---
-        // Strategy 1: Look for the Easy Apply button by selector
-        const applyBtnSels = [
-            'button.jobs-apply-button',
-            'button[aria-label*="Easy Apply"]',
-            'button.jobs-apply-button--top-card',
-            'button.jobs-s-apply',
-        ];
-        for (const sel of applyBtnSels) {
-            const el = document.querySelector(sel);
-            if (el) {
-                const txt = el.innerText.toLowerCase();
-                if (txt.includes('easy apply') || txt.includes('apply')) {
-                    result.easy_apply = true;
+        // Try to refine title from actual DOM (h1, h2, or any prominent heading)
+        const headings = document.querySelectorAll('h1, h2');
+        for (const h of headings) {
+            const txt = h.innerText.trim();
+            // Skip generic headings
+            if (txt.length > 5 && txt.length < 200
+                && !txt.toLowerCase().includes('about')
+                && !txt.toLowerCase().includes('similar')
+                && !txt.toLowerCase().includes('people')
+                && !txt.toLowerCase().includes('meet the')
+                && !txt.toLowerCase().includes('premium')) {
+                // Check if it looks like a job title (matches part of page title)
+                if (result.title && txt.includes(result.title.substring(0, 10))) {
+                    result.title = txt;
                     break;
                 }
             }
         }
-        // Strategy 2: Search for "Easy Apply" text in the top card area
-        if (!result.easy_apply) {
-            const topCardSels = [
-                '[class*="top-card"]', '[class*="topcard"]',
-                '[class*="unified-top"]', '.job-details-jobs-unified-top-card',
-            ];
-            for (const sel of topCardSels) {
-                const el = document.querySelector(sel);
-                if (el && el.innerText.includes('Easy Apply')) {
-                    result.easy_apply = true;
-                    break;
-                }
+
+        // Try to refine company from DOM — look for links to company pages
+        const companyLinks = document.querySelectorAll('a[href*="/company/"]');
+        for (const a of companyLinks) {
+            const txt = a.innerText.trim();
+            if (txt.length > 1 && txt.length < 100 && !txt.toLowerCase().includes('follow')) {
+                result.company = txt;
+                break;
             }
         }
-        // Strategy 3: Check if "Easy Apply" appears anywhere in page header
+
+        // === EASY APPLY ===
+        // Strategy 1: Look for buttons with Easy Apply text
+        const allButtons = document.querySelectorAll('button');
+        for (const btn of allButtons) {
+            if (btn.innerText.includes('Easy Apply')) {
+                result.easy_apply = true;
+                break;
+            }
+        }
+        // Strategy 2: Check page text (first 3000 chars covers the header area)
         if (!result.easy_apply) {
-            // Look in the first ~2000 chars of page text (above the description)
-            const bodyText = document.body.innerText.substring(0, 3000);
-            if (bodyText.includes('Easy Apply')) {
+            const headerText = document.body.innerText.substring(0, 3000);
+            if (headerText.includes('Easy Apply')) {
                 result.easy_apply = true;
             }
         }
 
-        // --- Description ---
-        // Strategy 1: Find the "About the job" heading and take the next sibling content
-        const allElements = document.querySelectorAll('h2, h3, span, div');
-        for (const el of allElements) {
-            const txt = el.innerText.trim().toLowerCase();
-            if (txt === 'about the job' || txt === 'about this job') {
-                // Walk siblings and parent siblings to find the description block
-                let descEl = el.nextElementSibling;
-                // Sometimes the description is the next sibling
-                if (descEl && descEl.innerText.trim().length > 50) {
-                    result.description_text = descEl.innerText.trim();
-                    break;
-                }
-                // Sometimes we need to go up one level and check next sibling
-                let parent = el.parentElement;
-                if (parent) {
-                    descEl = parent.nextElementSibling;
-                    if (descEl && descEl.innerText.trim().length > 50) {
-                        result.description_text = descEl.innerText.trim();
-                        break;
-                    }
-                }
-                // Try the parent's parent
-                if (parent && parent.parentElement) {
-                    descEl = parent.parentElement.nextElementSibling;
-                    if (descEl && descEl.innerText.trim().length > 50) {
-                        result.description_text = descEl.innerText.trim();
-                        break;
-                    }
-                }
-            }
+        // === DESCRIPTION ===
+        // Strategy 1: Use data-testid for expandable text box
+        const expandable = document.querySelector('[data-testid="expandable-text-box"]');
+        if (expandable && expandable.innerText.trim().length > 50) {
+            result.description_text = expandable.innerText.trim();
         }
 
-        // Strategy 2: Try known CSS selectors
+        // Strategy 2: Find "About the job" h2 and grab its parent's next sibling
         if (!result.description_text) {
-            const descSels = [
-                '#job-details',
-                '.jobs-description-content__text',
-                '.show-more-less-html__markup',
-                'article.jobs-description__container',
-                '.jobs-description__content',
-                '.jobs-box__html-content',
-                '.jobs-description',
-            ];
-            for (const sel of descSels) {
-                const el = document.querySelector(sel);
-                if (el && el.innerText.trim().length > 100) {
-                    result.description_text = el.innerText.trim();
-                    break;
+            const allH2 = document.querySelectorAll('h2');
+            for (const h2 of allH2) {
+                const txt = h2.innerText.trim().toLowerCase();
+                if (txt === 'about the job' || txt === 'about this job') {
+                    // Walk up to find the containing section, then get next sibling
+                    let container = h2.parentElement;
+                    for (let i = 0; i < 5 && container; i++) {
+                        const next = container.nextElementSibling;
+                        if (next && next.innerText.trim().length > 50) {
+                            result.description_text = next.innerText.trim();
+                            break;
+                        }
+                        container = container.parentElement;
+                    }
+                    if (result.description_text) break;
                 }
             }
         }
 
-        // Strategy 3: Find the section between "About the job" and
-        // "About the company" / "Set alert" by scanning page text
+        // Strategy 3: Text boundary extraction from full page text
         if (!result.description_text) {
             const body = document.body.innerText;
-            const markers = [
-                {start: 'About the job', ends: ['Set alert for similar', 'About the company', 'People you can reach']},
-                {start: 'About this job', ends: ['Set alert for similar', 'About the company', 'People you can reach']},
+            const startMarkers = ['About the job', 'About this job'];
+            const endMarkers = [
+                'Set alert for similar', 'About the company',
+                'People you can reach', 'Meet the hiring team',
+                'Similar jobs', 'Interested in working',
             ];
-            for (const m of markers) {
-                const startIdx = body.indexOf(m.start);
+            for (const start of startMarkers) {
+                const startIdx = body.indexOf(start);
                 if (startIdx === -1) continue;
-                const contentStart = startIdx + m.start.length;
+                const contentStart = startIdx + start.length;
                 let endIdx = body.length;
-                for (const end of m.ends) {
+                for (const end of endMarkers) {
                     const idx = body.indexOf(end, contentStart);
                     if (idx !== -1 && idx < endIdx) endIdx = idx;
                 }
@@ -381,12 +341,27 @@ async def _extract_detail_via_js(page: Any) -> dict[str, Any]:
             }
         }
 
-        // Clean up: remove "Show more" / "Show less" artifacts
+        // Strategy 4: Find longest text in a data-testid element
+        if (!result.description_text) {
+            const testidEls = document.querySelectorAll('[data-testid]');
+            let best = '';
+            for (const el of testidEls) {
+                const txt = el.innerText.trim();
+                if (txt.length > best.length && txt.length > 100 && txt.length < 15000) {
+                    best = txt;
+                }
+            }
+            if (best) result.description_text = best;
+        }
+
+        // Clean up artifacts
         if (result.description_text) {
             result.description_text = result.description_text
-                .replace(/Show more$/i, '')
-                .replace(/Show less$/i, '')
-                .replace(/\\.\\.\\. more$/i, '')
+                .replace(/^\\s*Show more\\s*/i, '')
+                .replace(/\\s*Show more\\s*$/i, '')
+                .replace(/\\s*Show less\\s*$/i, '')
+                .replace(/\\s*… more\\s*$/i, '')
+                .replace(/\\s*\\.\\.\\.\\s*more\\s*$/i, '')
                 .trim();
         }
 
@@ -411,6 +386,7 @@ async def _discover_real(
     remote: bool = False,
     seniority: list[str] | None = None,
     max_pages: int = 10,
+    openai_api_key: str = "",
 ) -> list[dict[str, Any]]:
     """Run discovery against real LinkedIn using saved cookies."""
     from playwright.async_api import async_playwright
@@ -493,8 +469,11 @@ async def _discover_real(
                 logger.info("Navigating to search page %d: %s", page_num + 1, search_url)
                 await rate.wait()
 
-                # Use networkidle to wait for React/JS to finish rendering
-                await page.goto(search_url, wait_until="networkidle", timeout=45_000)
+                # Use domcontentloaded — LinkedIn's pages never reach "networkidle"
+                # due to persistent WebSocket/analytics connections
+                await page.goto(search_url, wait_until="domcontentloaded", timeout=30_000)
+                # Give React time to hydrate and render job cards
+                await page.wait_for_timeout(3000)
 
                 # Wait for either job cards to appear or a timeout
                 try:
@@ -606,10 +585,12 @@ async def _discover_real(
                         # Wait for the page content to render (React SPA)
                         await page.wait_for_timeout(3000)
 
-                        # Try to wait for a heading or description to appear
+                        # Try to wait for description or expandable text to appear
                         try:
                             await page.wait_for_selector(
-                                "h1, h2, [class*='top-card'], [class*='topcard']",
+                                "[data-testid='expandable-text-box'], "
+                                "h1, h2, "
+                                "a[href*='/company/']",
                                 timeout=8_000,
                             )
                         except Exception:
@@ -648,15 +629,20 @@ async def _discover_real(
                     except Exception as exc:
                         logger.warning("Failed to fetch detail for %s: %s", ext_id, exc)
 
+                    # Clean the description: use LLM if API key available
+                    raw_desc = detail.get("description_text", "")
+                    if openai_api_key and raw_desc:
+                        cleaned_desc = clean_description_llm(raw_desc, openai_api_key)
+                    else:
+                        cleaned_desc = clean_description_rules(raw_desc)
+
                     job_data: dict[str, Any] = {
                         "external_id": ext_id,
                         "url": detail_url,
                         "title": detail.get("title") or card.get("title", ""),
                         "company": detail.get("company") or card.get("company", ""),
                         "location": detail.get("location") or card.get("location", ""),
-                        "description_text": clean_description_rules(
-                            detail.get("description_text", "")
-                        ),
+                        "description_text": cleaned_desc,
                         "easy_apply": detail.get("easy_apply", False),
                         "source": "linkedin",
                         "hash": job_hash(

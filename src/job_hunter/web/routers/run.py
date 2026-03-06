@@ -107,6 +107,7 @@ async def run_discover(request: Request):
             location=params.get("location", ""),
             remote=params.get("remote", False),
             seniority=params.get("seniority"),
+            openai_api_key=params.get("openai_api_key", ""),
         )
         logger.info("Discover returned %d jobs", len(job_dicts))
         if not job_dicts:

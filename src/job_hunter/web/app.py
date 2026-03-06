@@ -43,6 +43,27 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         if not hasattr(app.state, "task_manager") or app.state.task_manager is None:
             app.state.task_manager = TaskManager()
         app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+        # Register custom Jinja2 filters
+        import markupsafe
+        try:
+            import markdown as _md
+
+            def _md_filter(text: str) -> markupsafe.Markup:
+                """Convert Markdown text to safe HTML."""
+                if not text:
+                    return markupsafe.Markup("")
+                html = _md.markdown(text, extensions=["nl2br", "sane_lists"])
+                return markupsafe.Markup(html)
+        except ImportError:
+            def _md_filter(text: str) -> markupsafe.Markup:
+                """Fallback: escape and preserve whitespace."""
+                import html as _html
+                escaped = _html.escape(text or "")
+                return markupsafe.Markup(f"<pre style='white-space:pre-wrap'>{escaped}</pre>")
+
+        app.state.templates.env.filters["markdown"] = _md_filter
+
         yield
         # Shutdown
         if owns_engine:

@@ -115,19 +115,26 @@ job posting page. The text may contain navigation elements, sidebar content,
 company boilerplate, and formatting artifacts.
 
 Your task:
-1. Extract ONLY the job description content (requirements, responsibilities, qualifications, benefits)
-2. Format it cleanly with proper sections and bullet points
+1. Extract ONLY the job description content (role overview, responsibilities,
+   requirements, qualifications, benefits, compensation)
+2. Output clean **Markdown** with:
+   - A short 1-2 sentence role summary at the top (no heading)
+   - Clear section headings using **bold** text (e.g. **Responsibilities**, **Requirements**)
+   - Bullet points (- ) for list items
+   - **Bold** for key terms, skills, and important qualifications
+   - Preserve salary/compensation if mentioned
 3. Keep ALL factual content — do not omit any requirements, skills, or details
-4. Remove navigation text, sidebar widgets, "Try Premium", language selectors, etc.
-5. Keep the company name and job title if present at the top
+4. REMOVE: navigation text, sidebar widgets, "Try Premium", language selectors,
+   "Show match details", "Tailor my resume", company follower counts,
+   "About the company" boilerplate, "Set alert for similar jobs", footer text
+5. Be concise but complete — no fluff, no commentary, no "Here is the cleaned..."
 
-Return ONLY the cleaned job description. No commentary or explanation.
-Keep it concise but complete — preserve every requirement and qualification.
+Output ONLY the Markdown-formatted job description.
 """
 
 
 def clean_description_llm(raw: str, api_key: str, model: str = "gpt-4o-mini") -> str:
-    """Use an LLM to clean and format a raw job description.
+    """Use an LLM to clean and format a raw job description into Markdown.
 
     Falls back to rule-based cleaning if the LLM call fails.
     """
@@ -138,19 +145,21 @@ def clean_description_llm(raw: str, api_key: str, model: str = "gpt-4o-mini") ->
         logger.debug("No API key — falling back to rule-based cleaning")
         return clean_description_rules(raw)
 
+    # First apply rule-based cleaning to reduce token usage
+    pre_cleaned = clean_description_rules(raw)
+    if len(pre_cleaned) < 30:
+        pre_cleaned = raw[:8000]
+
     try:
         from openai import OpenAI
 
         client = OpenAI(api_key=api_key)
 
-        # Truncate to avoid token limits
-        truncated = raw[:8000]
-
         response = client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": _FORMAT_SYSTEM_PROMPT},
-                {"role": "user", "content": truncated},
+                {"role": "user", "content": pre_cleaned[:6000]},
             ],
             temperature=0.1,
             max_tokens=2000,

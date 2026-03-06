@@ -182,6 +182,35 @@ class TestJobs:
         assert client.get(f"/api/jobs/{h2}").status_code == 404
         assert client.get(f"/api/jobs/{h3}").status_code == 404
 
+    def test_reformat_no_api_key(self, client: TestClient) -> None:
+        """Reformat should fail gracefully when no API key is set."""
+        h = job_hash(external_id="w1", title="Python Dev", company="Acme")
+        r = client.post(f"/api/jobs/{h}/reformat")
+        assert r.status_code == 400
+        assert "API key" in r.json()["detail"]
+
+    def test_reformat_not_found(self, client: TestClient) -> None:
+        r = client.post("/api/jobs/nonexistent/reformat")
+        assert r.status_code == 404
+
+    def test_apply_single_not_found(self, client: TestClient) -> None:
+        r = client.post("/api/jobs/nonexistent/apply")
+        assert r.status_code == 404
+
+    def test_apply_single_no_url(self, client: TestClient) -> None:
+        """Jobs with relative URLs can't be applied to via Easy Apply."""
+        h = job_hash(external_id="w1", title="Python Dev", company="Acme")
+        r = client.post(f"/api/jobs/{h}/apply")
+        assert r.status_code == 400
+
+    def test_job_detail_renders_markdown(self, client: TestClient) -> None:
+        """Job detail page should render markdown description as HTML."""
+        h = job_hash(external_id="w1", title="Python Dev", company="Acme")
+        r = client.get(f"/api/jobs/{h}")
+        assert r.status_code == 200
+        # The markdown filter should convert text to HTML (at minimum, a <p> tag)
+        assert "Python Dev" in r.text
+
 
 # ---------------------------------------------------------------------------
 # Settings

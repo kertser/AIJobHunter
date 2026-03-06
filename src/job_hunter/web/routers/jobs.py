@@ -154,3 +154,96 @@ async def remove_job(job_hash: str, session: Session = Depends(get_db)):
     return {"deleted": True, "hash": job_hash}
 
 
+@router.post("/api/jobs/{job_hash}/reformat")
+async def reformat_description(job_hash: str, request: Request, session: Session = Depends(get_db)):
+    """Re-format a job description using LLM for clean Markdown output."""
+    job = session.execute(select(Job).where(Job.hash == job_hash)).scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if not job.description_text:
+        raise HTTPException(400, "No description to reformat")
+
+    settings = request.app.state.settings
+    api_key = settings.openai_api_key
+    if not api_key:
+        raise HTTPException(400, "OpenAI API key not set — go to Settings")
+
+    from job_hunter.matching.description_cleaner import clean_description_llm
+    cleaned = clean_description_llm(job.description_text, api_key)
+    job.description_text = cleaned
+    session.flush()
+    return {"hash": job.hash, "description_length": len(cleaned)}
+
+
+@router.post("/api/jobs/{job_hash}/apply")
+async def apply_single_job(job_hash: str, request: Request, session: Session = Depends(get_db)):
+    """Trigger Easy Apply for a single job."""
+    from fastapi.responses import JSONResponse
+
+    job = session.execute(select(Job).where(Job.hash == job_hash)).scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if not job.url or not job.url.startswith("http"):
+        raise HTTPException(400, "Job has no valid LinkedIn URL")
+
+    settings = request.app.state.settings
+    tm = request.app.state.task_manager
+
+    if tm.is_running:
+        return JSONResponse({"error": "A task is already running"}, status_code=409)
+
+    from job_hunter.db.models import ApplicationAttempt, ApplicationResult
+    from job_hunter.db.repo import make_session, save_attempt
+    from job_hunter.linkedin.apply import apply_to_job
+
+    engine = request.app.state.engine
+    job_url = job.url
+    job_hash_val = job.hash
+    mock = settings.mock
+    dry_run = settings.dry_run
+    headless = settings.headless
+    slowmo_ms = settings.slowmo_ms
+
+    resume_path = settings.data_dir / "resume.pdf"
+    resume_str = str(resume_path) if resume_path.exists() else "tests/fixtures/resume.txt"
+
+    async def _run():
+        from job_hunter.linkedin.mock_site import MockLinkedInServer
+        actual_url = job_url
+        mock_server = None
+        if mock:
+            mock_server = MockLinkedInServer()
+            base_url = mock_server.start()
+            actual_url = f"{base_url}{job_url}"
+        try:
+            result = await apply_to_job(
+                job_url=actual_url, resume_path=resume_str,
+                dry_run=dry_run, headless=headless,
+                slowmo_ms=slowmo_ms, mock=mock,
+            )
+            sess = make_session(engine)
+            result_map = {"success": ApplicationResult.SUCCESS, "dry_run": ApplicationResult.DRY_RUN,
+                          "failed": ApplicationResult.FAILED, "blocked": ApplicationResult.BLOCKED}
+            attempt = ApplicationAttempt(
+                job_hash=job_hash_val, result=result_map.get(result["result"], ApplicationResult.FAILED),
+                failure_stage=result.get("failure_stage"),
+                form_answers_json=result.get("form_answers", {}),
+            )
+            save_attempt(sess, attempt)
+            status_map = {"success": JobStatus.APPLIED, "dry_run": JobStatus.APPLIED,
+                          "failed": JobStatus.FAILED, "blocked": JobStatus.BLOCKED}
+            from job_hunter.db.models import Job as JobModel
+            db_job = sess.execute(select(JobModel).where(JobModel.hash == job_hash_val)).scalar_one_or_none()
+            if db_job:
+                db_job.status = status_map.get(result["result"], JobStatus.FAILED)
+            sess.commit()
+            sess.close()
+            return {"result": result["result"], "job_hash": job_hash_val}
+        finally:
+            if mock_server:
+                mock_server.stop()
+
+    tm.start_task("apply", _run())
+    return JSONResponse({"started": "apply", "job_hash": job_hash_val}, status_code=202)
+
+

@@ -12,10 +12,10 @@ profiles:
   seniority:
   - Senior
   - Mid-Senior
+  - Junior
   blacklist_companies: []
   blacklist_titles:
   - Intern
-  - Junior
   min_fit_score: 80
   min_similarity: 0.4
   max_applications_per_day: 20
@@ -32,10 +32,10 @@ profiles:
   seniority:
   - Senior
   - Mid-Senior
+  - Junior
   blacklist_companies: []
   blacklist_titles:
   - Intern
-  - Junior
   min_fit_score: 75
   min_similarity: 0.35
   max_applications_per_day: 15
@@ -52,10 +52,10 @@ profiles:
   seniority:
   - Senior
   - Mid-Senior
+  - Junior
   blacklist_companies: []
   blacklist_titles:
   - Intern
-  - Junior
   min_fit_score: 78
   min_similarity: 0.38
   max_applications_per_day: 25

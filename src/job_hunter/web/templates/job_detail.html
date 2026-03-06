@@ -6,11 +6,17 @@
 <h2>{{ job.title }}</h2>
 <p><strong>{{ job.company }}</strong> · {{ job.location }}</p>
 <p>
-  <span class="status-badge status-{{ job.status.value }}">{{ job.status.value }}</span>
-  {% if job.easy_apply %}<kbd>Easy Apply</kbd>{% endif %}
+  <span class="status-badge status-{{ job.status.value }}" id="job-status-badge">{{ job.status.value }}</span>
+  {% if job.easy_apply %}<kbd style="background: #22c55e; color: white;">✓ Easy Apply</kbd>{% endif %}
 </p>
 
-<div style="display: flex; gap: 0.5rem; margin: 1rem 0;">
+<div style="display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap;">
+  {% if job.easy_apply and job.url.startswith('http') %}
+  <button class="action-btn" style="background: #22c55e; border-color: #22c55e; color: white;"
+          onclick="applyToJob('{{ job.hash }}')" id="apply-btn">
+    ⚡ Easy Apply
+  </button>
+  {% endif %}
   <button class="action-btn" onclick="setStatus('{{ job.hash }}', 'queued')">Queue</button>
   <button class="action-btn secondary" onclick="setStatus('{{ job.hash }}', 'skipped')">Skip</button>
   <button class="action-btn outline" onclick="setStatus('{{ job.hash }}', 'review')">Review</button>
@@ -35,8 +41,23 @@
 {% endfor %}
 {% endif %}
 
-<h3>Description</h3>
-<div class="card" style="white-space: pre-wrap;">{{ job.description_text or 'No description available.' }}</div>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem;">
+  <h3 style="margin: 0;">Description</h3>
+  {% if job.description_text %}
+  <button class="outline action-btn" onclick="reformatDescription('{{ job.hash }}')" id="reformat-btn"
+          title="Clean up and beautify description using AI">
+    ✨ Reformat with AI
+  </button>
+  {% endif %}
+</div>
+
+<div class="card" id="description-container" style="margin-top: 0.5rem;">
+  {% if job.description_text %}
+  <div class="job-description">{{ job.description_text | markdown }}</div>
+  {% else %}
+  <p style="color: var(--pico-muted-color);">No description available.</p>
+  {% endif %}
+</div>
 
 {% if attempts %}
 <h3 style="margin-top: 2rem;">Application Attempts</h3>
@@ -62,6 +83,18 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<style>
+  .job-description h1, .job-description h2, .job-description h3 {
+    margin-top: 1.2rem; margin-bottom: 0.5rem; font-size: 1.1rem;
+  }
+  .job-description ul, .job-description ol {
+    margin: 0.5rem 0; padding-left: 1.5rem;
+  }
+  .job-description li { margin-bottom: 0.25rem; }
+  .job-description p { margin: 0.5rem 0; }
+  .job-description strong { color: var(--pico-primary); }
+  #apply-btn:disabled, #reformat-btn:disabled { opacity: 0.6; cursor: wait; }
+</style>
 <script>
 function setStatus(hash, status) {
   fetch('/api/jobs/' + hash + '/status', {
@@ -70,8 +103,9 @@ function setStatus(hash, status) {
     body: JSON.stringify({status: status})
   }).then(function(r) {
     if (r.ok) {
+      var badge = document.getElementById('job-status-badge');
+      if (badge) { badge.textContent = status; badge.className = 'status-badge status-' + status; }
       showToast('Status → ' + status);
-      setTimeout(function() { location.reload(); }, 500);
     } else {
       r.text().then(function(t) { showToast('Error: ' + t); });
     }
@@ -82,14 +116,61 @@ function deleteJob(hash) {
   if (!confirm('Delete this job permanently?')) return;
   fetch('/api/jobs/' + hash, { method: 'DELETE' })
     .then(function(r) {
-      if (r.ok) {
-        window.location = '/jobs';
-      } else {
-        r.text().then(function(t) { showToast('Delete failed: ' + t); });
-      }
+      if (r.ok) { window.location = '/jobs'; }
+      else { r.text().then(function(t) { showToast('Delete failed: ' + t); }); }
     })
     .catch(function(e) { showToast('Delete error: ' + e); });
 }
+
+function reformatDescription(hash) {
+  var btn = document.getElementById('reformat-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Formatting…'; }
+  fetch('/api/jobs/' + hash + '/reformat', { method: 'POST' })
+    .then(function(r) {
+      if (r.ok) {
+        showToast('Description reformatted!');
+        setTimeout(function() { location.reload(); }, 600);
+      } else {
+        r.json().then(function(data) { showToast('Error: ' + (data.detail || 'reformat failed')); });
+      }
+    })
+    .catch(function(e) { showToast('Error: ' + e); })
+    .finally(function() {
+      if (btn) { btn.disabled = false; btn.textContent = '✨ Reformat with AI'; }
+    });
+}
+
+function applyToJob(hash) {
+  if (!confirm('Trigger Easy Apply for this job?')) return;
+  var btn = document.getElementById('apply-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Applying…'; }
+  fetch('/api/jobs/' + hash + '/apply', { method: 'POST' })
+    .then(function(r) {
+      return r.json().then(function(data) {
+        if (r.ok || r.status === 202) {
+          showToast('Easy Apply started! Check Run Controls for progress.');
+          // Poll for completion
+          var pollInterval = setInterval(function() {
+            fetch('/api/run/task-status').then(function(sr) {
+              return sr.json();
+            }).then(function(status) {
+              if (!status.running) {
+                clearInterval(pollInterval);
+                showToast('Easy Apply finished: ' + (status.result ? JSON.stringify(status.result) : 'done'));
+                setTimeout(function() { location.reload(); }, 800);
+              }
+            });
+          }, 2000);
+        } else {
+          showToast('Error: ' + (data.detail || data.error || 'apply failed'));
+          if (btn) { btn.disabled = false; btn.textContent = '⚡ Easy Apply'; }
+        }
+      });
+    })
+    .catch(function(e) {
+      showToast('Error: ' + e);
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ Easy Apply'; }
+    });
+}
 </script>
 {% endblock %}
-

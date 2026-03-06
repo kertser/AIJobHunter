@@ -1,6 +1,8 @@
 
 Improve description LLM cleaning and formatting (beautify, add bold/underline/bullits, remove extraneous info, etc.)
 
+Add Easy Apply button inside job description page to trigger the Easy Apply wizard directly from the job listing
+
 Test hunt apply in dry-run mode with real LinkedIn to verify Easy Apply wizard navigation works
 
 Add automated daily discover+score+apply cycle with GUI controls for scheduling and pausing
