@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from job_hunter.db.models import ApplicationAttempt, Job, JobStatus, Score
+from job_hunter.db.models import ApplicationAttempt, ApplicationResult, Job, JobStatus, Score
 from job_hunter.db.repo import delete_job, get_scores_for_jobs
 from job_hunter.web.deps import get_db
 
@@ -18,6 +18,24 @@ router = APIRouter(tags=["jobs"])
 
 class StatusUpdate(BaseModel):
     status: str
+
+
+def _get_applied_map(session: Session, hashes: list[str]) -> dict:
+    """Build a map of job_hash → earliest applied_at datetime."""
+    if not hashes:
+        return {}
+    attempts = session.execute(
+        select(ApplicationAttempt)
+        .where(ApplicationAttempt.job_hash.in_(hashes))
+        .where(ApplicationAttempt.result.in_([
+            ApplicationResult.SUCCESS, ApplicationResult.DRY_RUN,
+        ]))
+    ).scalars().all()
+    result = {}
+    for a in attempts:
+        if a.job_hash not in result or (a.started_at and a.started_at < result[a.job_hash]):
+            result[a.job_hash] = a.started_at
+    return result
 
 
 @router.get("/jobs")
@@ -32,10 +50,11 @@ async def jobs_page(request: Request, session: Session = Depends(get_db), status
     jobs = session.execute(query).scalars().all()
     hashes = [j.hash for j in jobs]
     scores_map = get_scores_for_jobs(session, hashes)
+    applied_map = _get_applied_map(session, hashes)
     # Show only statuses that are actually used in the pipeline
     statuses = [s.value for s in JobStatus if s != JobStatus.SCORED]
     return templates.TemplateResponse(request, "jobs.html", {
-        "jobs": jobs, "scores_map": scores_map,
+        "jobs": jobs, "scores_map": scores_map, "applied_map": applied_map,
         "statuses": statuses, "current_status": status,
     })
 
@@ -86,9 +105,13 @@ async def get_job(job_hash: str, request: Request, session: Session = Depends(ge
     attempts = session.execute(
         select(ApplicationAttempt).where(ApplicationAttempt.job_hash == job_hash)
     ).scalars().all()
+    # Get applied_at date from successful attempts
+    applied_map = _get_applied_map(session, [job_hash])
+    applied_at = applied_map.get(job_hash)
     templates = request.app.state.templates
     return templates.TemplateResponse(request, "job_detail.html", {
         "job": job, "scores": scores, "attempts": attempts,
+        "applied_at": applied_at,
     })
 
 

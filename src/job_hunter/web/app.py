@@ -64,6 +64,18 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
         app.state.templates.env.filters["markdown"] = _md_filter
 
+        # Date formatting filter
+        from datetime import datetime as _dt
+        def _datefmt(val, fmt: str = "%b %d, %Y") -> str:
+            """Format a datetime as a short date string, or '—' for None."""
+            if val is None:
+                return "—"
+            if isinstance(val, _dt):
+                return val.strftime(fmt)
+            return str(val)
+
+        app.state.templates.env.filters["datefmt"] = _datefmt
+
         yield
         # Shutdown
         if owns_engine:
@@ -80,7 +92,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # Import and include routers
-    from job_hunter.web.routers import dashboard, jobs, profiles, reports, run, settings as settings_router
+    from job_hunter.web.routers import dashboard, jobs, onboarding, profiles, reports, run, settings as settings_router
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon():
@@ -90,6 +102,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         return Response(status_code=204)
 
     app.include_router(dashboard.router)
+    app.include_router(onboarding.router)
     app.include_router(jobs.router)
     app.include_router(profiles.router)
     app.include_router(run.router)

@@ -1,5 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Jobs — AI Job Hunter{% endblock %}
+{% block extra_head %}
+<style>
+  th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sortable:hover { text-decoration: underline; }
+  th .sort-arrow { font-size: 0.7rem; margin-left: 2px; opacity: 0.4; }
+  th.sort-asc .sort-arrow-up, th.sort-desc .sort-arrow-down { opacity: 1; }
+  th.sort-asc .sort-arrow-down, th.sort-desc .sort-arrow-up { opacity: 0.2; }
+</style>
+{% endblock %}
 {% block content %}
 <h2>Jobs</h2>
 
@@ -35,13 +44,15 @@
   <thead>
     <tr>
       <th style="width: 2rem;"><input type="checkbox" id="select-all" onclick="toggleAll(this)"></th>
-      <th>Title</th>
-      <th>Company</th>
-      <th>Location</th>
-      <th>Status</th>
-      <th>Fit</th>
-      <th>Sim</th>
-      <th>Easy Apply</th>
+      <th class="sortable" data-col="1" data-type="string" onclick="sortTable(this)">Title <span class="sort-arrow"><span class="sort-arrow-up">▲</span><span class="sort-arrow-down">▼</span></span></th>
+      <th class="sortable" data-col="2" data-type="string" onclick="sortTable(this)">Company <span class="sort-arrow"><span class="sort-arrow-up">▲</span><span class="sort-arrow-down">▼</span></span></th>
+      <th class="sortable" data-col="3" data-type="string" onclick="sortTable(this)">Location <span class="sort-arrow"><span class="sort-arrow-up">▲</span><span class="sort-arrow-down">▼</span></span></th>
+      <th class="sortable" data-col="4" data-type="string" onclick="sortTable(this)">Status <span class="sort-arrow"><span class="sort-arrow-up">▲</span><span class="sort-arrow-down">▼</span></span></th>
+      <th class="sortable" data-col="5" data-type="number" onclick="sortTable(this)">Fit <span class="sort-arrow"><span class="sort-arrow-up">▲</span><span class="sort-arrow-down">▼</span></span></th>
+      <th class="sortable" data-col="6" data-type="number" onclick="sortTable(this)">Sim <span class="sort-arrow"><span class="sort-arrow-up">▲</span><span class="sort-arrow-down">▼</span></span></th>
+      <th class="sortable" data-col="7" data-type="string" onclick="sortTable(this)">Easy Apply <span class="sort-arrow"><span class="sort-arrow-up">▲</span><span class="sort-arrow-down">▼</span></span></th>
+      <th class="sortable" data-col="8" data-type="date" onclick="sortTable(this)">Posted <span class="sort-arrow"><span class="sort-arrow-up">▲</span><span class="sort-arrow-down">▼</span></span></th>
+      <th class="sortable" data-col="9" data-type="date" onclick="sortTable(this)">Applied <span class="sort-arrow"><span class="sort-arrow-up">▲</span><span class="sort-arrow-down">▼</span></span></th>
       <th>Actions</th>
     </tr>
   </thead>
@@ -49,21 +60,23 @@
     {% for job in jobs %}
     <tr id="job-row-{{ job.hash }}">
       <td><input type="checkbox" class="job-checkbox" value="{{ job.hash }}" onclick="updateSelectionUI()"></td>
-      <td><a href="/api/jobs/{{ job.hash }}">{{ job.title }}</a></td>
-      <td>{{ job.company }}</td>
-      <td>{{ job.location }}</td>
-      <td><span class="status-badge status-{{ job.status.value }}" id="status-{{ job.hash }}">{{ job.status.value }}</span></td>
-      <td>
+      <td data-sort-value="{{ job.title }}"><a href="/api/jobs/{{ job.hash }}">{{ job.title }}</a></td>
+      <td data-sort-value="{{ job.company }}">{{ job.company }}</td>
+      <td data-sort-value="{{ job.location }}">{{ job.location }}</td>
+      <td data-sort-value="{{ job.status.value }}"><span class="status-badge status-{{ job.status.value }}" id="status-{{ job.hash }}">{{ job.status.value }}</span></td>
+      <td data-sort-value="{{ scores_map[job.hash].llm_fit_score if scores_map.get(job.hash) else -1 }}">
         {% if scores_map.get(job.hash) %}
           {{ scores_map[job.hash].llm_fit_score }}
         {% else %}—{% endif %}
       </td>
-      <td>
+      <td data-sort-value="{{ scores_map[job.hash].embedding_similarity if scores_map.get(job.hash) else -1 }}">
         {% if scores_map.get(job.hash) %}
           {{ "%.2f"|format(scores_map[job.hash].embedding_similarity) }}
         {% else %}—{% endif %}
       </td>
-      <td>{% if job.easy_apply %}✅{% else %}❌{% endif %}</td>
+      <td data-sort-value="{{ '1' if job.easy_apply else '0' }}">{% if job.easy_apply %}✅{% else %}❌{% endif %}</td>
+      <td data-sort-value="{{ job.posted_at.isoformat() if job.posted_at else '' }}">{{ job.posted_at | datefmt }}</td>
+      <td data-sort-value="{{ applied_map[job.hash].isoformat() if applied_map.get(job.hash) else '' }}">{{ applied_map.get(job.hash) | datefmt }}</td>
       <td style="white-space: nowrap;">
         {% if job.status.value != 'queued' %}
         <button class="action-btn outline" onclick="setStatus('{{ job.hash }}', 'queued')">Queue</button>
@@ -80,7 +93,7 @@
     </tr>
     {% endfor %}
     {% if not jobs %}
-    <tr><td colspan="9" style="text-align:center; color: var(--pico-muted-color);">No jobs found.</td></tr>
+    <tr><td colspan="11" style="text-align:center; color: var(--pico-muted-color);">No jobs found.</td></tr>
     {% endif %}
   </tbody>
 </table>
@@ -89,6 +102,51 @@
 
 {% block extra_scripts %}
 <script>
+// --- Sort state ---
+var currentSortCol = null;
+var currentSortDir = 'asc';
+
+function sortTable(th) {
+  var col = parseInt(th.getAttribute('data-col'));
+  var type = th.getAttribute('data-type');
+  var tbody = document.getElementById('job-table-body');
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+
+  // Toggle direction if same column
+  if (currentSortCol === col) {
+    currentSortDir = currentSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    currentSortCol = col;
+    currentSortDir = 'asc';
+  }
+
+  // Clear sort classes from all headers
+  document.querySelectorAll('th.sortable').forEach(function(h) {
+    h.classList.remove('sort-asc', 'sort-desc');
+  });
+  th.classList.add('sort-' + currentSortDir);
+
+  rows.sort(function(a, b) {
+    var cellA = a.children[col];
+    var cellB = b.children[col];
+    if (!cellA || !cellB) return 0;
+    var valA = (cellA.getAttribute('data-sort-value') || '').toLowerCase();
+    var valB = (cellB.getAttribute('data-sort-value') || '').toLowerCase();
+
+    var cmp = 0;
+    if (type === 'number') {
+      cmp = (parseFloat(valA) || -999) - (parseFloat(valB) || -999);
+    } else if (type === 'date') {
+      cmp = (valA || '0').localeCompare(valB || '0');
+    } else {
+      cmp = valA.localeCompare(valB);
+    }
+    return currentSortDir === 'asc' ? cmp : -cmp;
+  });
+
+  rows.forEach(function(row) { tbody.appendChild(row); });
+}
+
 // --- Selection helpers ---
 function getSelectedHashes() {
   return Array.from(document.querySelectorAll('.job-checkbox:checked')).map(function(cb) { return cb.value; });

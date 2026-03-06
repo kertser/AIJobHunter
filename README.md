@@ -465,9 +465,10 @@ Opens a browser-based dashboard at `http://localhost:8000` with:
 
 | Page | Path | Description |
 |---|---|---|
+| **Onboarding** | `/onboarding` | First-run wizard — upload resume PDF + LinkedIn URL to generate profiles |
 | **Dashboard** | `/` | Summary cards, applied today, top missing skills, quick actions |
-| **Jobs** | `/jobs` | Filterable job table with status badges, inline Queue/Skip/Review buttons |
-| **Job Detail** | `/api/jobs/{hash}` | Full description, scores, missing skills, risk flags, application attempts |
+| **Jobs** | `/jobs` | Sortable/filterable job table with status, fit, dates, and inline actions |
+| **Job Detail** | `/api/jobs/{hash}` | Full description (Markdown), scores, Easy Apply button, application history |
 | **Profiles** | `/profiles` | View/edit user profile and search profiles via structured forms |
 | **Run Controls** | `/run` | Trigger Discover / Score / Apply / Full Pipeline with live SSE progress |
 | **Reports** | `/reports` | Browse and view daily reports |
@@ -602,6 +603,7 @@ AIJobHunter/
 │   │   ├── task_manager.py               # Background task runner + SSE events
 │   │   ├── routers/
 │   │   │   ├── dashboard.py              # GET / — summary stats
+│   │   │   ├── onboarding.py             # First-run profile setup wizard
 │   │   │   ├── jobs.py                   # Jobs list, detail, status PATCH
 │   │   │   ├── profiles.py               # User + search profile CRUD
 │   │   │   ├── run.py                    # Trigger pipeline + SSE progress
@@ -627,7 +629,7 @@ AIJobHunter/
 │   ├── test_pipeline.py                  # Pipeline orchestration + policies
 │   ├── test_reporting.py                 # Report generation (MD + JSON)
 │   ├── test_linkedin_session.py          # Session cookies + search URLs
-│   ├── test_web.py                       # Web GUI endpoints (29 tests)
+│   ├── test_web.py                       # Web GUI endpoints (37 tests)
 │   ├── test_description_cleaner.py       # Description cleanup (7 tests)
 │   └── fixtures/
 │       ├── resume.txt                    # Sample resume text
@@ -661,7 +663,7 @@ uv run pytest tests/test_profile_generation.py -v
 uv run pytest -k "test_upsert" -v
 ```
 
-**Current test suite:** 160 passed, 0 skipped.
+**Current test suite:** 166 passed, 0 skipped.
 
 All tests run offline with no API keys or network access required.
 

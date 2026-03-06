@@ -19,6 +19,8 @@ from job_hunter.web.app import create_app
 def test_app(tmp_path: Path):
     """Create a test app with in-memory DB and sample data."""
     settings = AppSettings(data_dir=tmp_path, mock=True, dry_run=True)
+    # Create a user_profile.yml so dashboard doesn't redirect to onboarding
+    (tmp_path / "user_profile.yml").write_text("name: Test User\ntitle: Tester\n")
     app = create_app(settings)
 
     # Pre-inject in-memory engine BEFORE the lifespan runs
@@ -291,8 +293,70 @@ class TestProfiles:
         data = r.json()
         assert data["profiles"] == []
 
-    def test_user_profile_api_empty(self, client: TestClient) -> None:
+    def test_user_profile_api(self, client: TestClient) -> None:
         r = client.get("/api/user-profile")
         assert r.status_code == 200
-        assert r.json()["user_profile"] is None
+        # user_profile.yml exists (created in fixture), so it returns data
+        data = r.json()["user_profile"]
+        assert data is not None
+        assert "name" in data
+
+
+# ---------------------------------------------------------------------------
+# Onboarding
+# ---------------------------------------------------------------------------
+
+class TestOnboarding:
+    def test_onboarding_shows_regenerate_if_profile_exists(self, client: TestClient) -> None:
+        """If user_profile.yml exists, /onboarding shows the re-generate form."""
+        r = client.get("/onboarding")
+        assert r.status_code == 200
+        assert "Re-generate" in r.text
+        assert "already have a profile" in r.text
+
+    def test_onboarding_page_shows_welcome_when_no_profile(self, test_app, tmp_path: Path) -> None:
+        """If user_profile.yml doesn't exist, /onboarding shows the wizard."""
+        # Remove the profile file created by the fixture
+        profile_path = tmp_path / "user_profile.yml"
+        if profile_path.exists():
+            profile_path.unlink()
+        with TestClient(test_app) as c:
+            r = c.get("/onboarding")
+            assert r.status_code == 200
+            assert "Welcome" in r.text
+
+    def test_dashboard_redirects_to_onboarding(self, test_app, tmp_path: Path) -> None:
+        """Dashboard should redirect to /onboarding when no profile exists."""
+        profile_path = tmp_path / "user_profile.yml"
+        if profile_path.exists():
+            profile_path.unlink()
+        with TestClient(test_app) as c:
+            r = c.get("/", follow_redirects=False)
+            assert r.status_code == 302
+            assert "/onboarding" in r.headers["location"]
+
+
+# ---------------------------------------------------------------------------
+# Date columns & sorting
+# ---------------------------------------------------------------------------
+
+class TestDateColumns:
+    def test_jobs_page_has_date_columns(self, client: TestClient) -> None:
+        r = client.get("/jobs")
+        assert r.status_code == 200
+        assert "Posted" in r.text
+        assert "Applied" in r.text
+
+    def test_jobs_page_has_sortable_headers(self, client: TestClient) -> None:
+        r = client.get("/jobs")
+        assert r.status_code == 200
+        assert "sortTable" in r.text
+        assert "data-sort-value" in r.text
+
+    def test_job_detail_has_dates(self, client: TestClient) -> None:
+        h = job_hash(external_id="w1", title="Python Dev", company="Acme")
+        r = client.get(f"/api/jobs/{h}")
+        assert r.status_code == 200
+        assert "Discovered" in r.text
+
 

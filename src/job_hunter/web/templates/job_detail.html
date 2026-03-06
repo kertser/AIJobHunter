@@ -4,10 +4,14 @@
 <nav aria-label="breadcrumb"><ul><li><a href="/jobs">Jobs</a></li><li>{{ job.title }}</li></ul></nav>
 
 <h2>{{ job.title }}</h2>
-<p><strong>{{ job.company }}</strong> · {{ job.location }}</p>
+<p><strong>{{ job.company }}</strong> · {{ job.location }}
+  {% if job.posted_at %} · <span style="color: var(--pico-muted-color);">Posted {{ job.posted_at | datefmt }}</span>{% endif %}
+</p>
 <p>
   <span class="status-badge status-{{ job.status.value }}" id="job-status-badge">{{ job.status.value }}</span>
   {% if job.easy_apply %}<kbd style="background: #22c55e; color: white;">✓ Easy Apply</kbd>{% endif %}
+  {% if applied_at %}<kbd style="background: #3b82f6; color: white;">Applied {{ applied_at | datefmt }}</kbd>{% endif %}
+  <small style="color: var(--pico-muted-color); margin-left: 0.5rem;">Discovered {{ job.collected_at | datefmt }}</small>
 </p>
 
 <div style="display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap;">

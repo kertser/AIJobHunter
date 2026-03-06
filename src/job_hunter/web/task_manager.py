@@ -73,6 +73,11 @@ class TaskManager:
         # Install log handler on root job_hunter logger
         root_logger = logging.getLogger("job_hunter")
         root_logger.addHandler(self._log_handler)
+        # Ensure root logger level is at most INFO so all task progress is captured,
+        # even if the user has set log level to WARNING/ERROR in settings.
+        saved_level = root_logger.level
+        if root_logger.level > logging.INFO:
+            root_logger.setLevel(logging.INFO)
 
         async def _wrapper() -> None:
             try:
@@ -87,6 +92,7 @@ class TaskManager:
                 logger.error("Task %s failed: %s", name, exc)
             finally:
                 root_logger.removeHandler(self._log_handler)
+                root_logger.setLevel(saved_level)
 
         self._task = asyncio.create_task(_wrapper())
         return True

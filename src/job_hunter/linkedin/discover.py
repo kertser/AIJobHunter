@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,48 @@ from job_hunter.matching.description_cleaner import clean_description_llm, clean
 from job_hunter.utils.hashing import job_hash
 
 logger = logging.getLogger("job_hunter.linkedin.discover")
+
+
+def _parse_relative_date(text: str) -> datetime | None:
+    """Parse a relative date string like '2 weeks ago' into a UTC datetime.
+
+    Also handles ISO format strings from <time datetime="..."> attributes.
+    Returns None if the text cannot be parsed.
+    """
+    if not text:
+        return None
+
+    # Try ISO format first (from <time datetime="...">)
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        pass
+
+    # Parse relative dates: "X unit(s) ago"
+    m = re.search(r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", text, re.IGNORECASE)
+    if not m:
+        return None
+
+    amount = int(m.group(1))
+    unit = m.group(2).lower()
+    now = datetime.now(timezone.utc)
+
+    if unit == "second":
+        return now - timedelta(seconds=amount)
+    elif unit == "minute":
+        return now - timedelta(minutes=amount)
+    elif unit == "hour":
+        return now - timedelta(hours=amount)
+    elif unit == "day":
+        return now - timedelta(days=amount)
+    elif unit == "week":
+        return now - timedelta(weeks=amount)
+    elif unit == "month":
+        return now - timedelta(days=amount * 30)
+    elif unit == "year":
+        return now - timedelta(days=amount * 365)
+    return None
 
 
 async def discover_jobs(
@@ -228,7 +272,7 @@ async def _extract_detail_via_js(page: Any) -> dict[str, Any]:
     """
     js_code = """
     () => {
-        const result = {title: '', company: '', description_text: '', easy_apply: false};
+        const result = {title: '', company: '', description_text: '', easy_apply: false, posted_at_text: ''};
 
         // === TITLE + COMPANY from <title> tag ===
         // LinkedIn format: "Job Title | Company Name | LinkedIn"
@@ -284,6 +328,33 @@ async def _extract_detail_via_js(page: Any) -> dict[str, Any]:
             const headerText = document.body.innerText.substring(0, 3000);
             if (headerText.includes('Easy Apply')) {
                 result.easy_apply = true;
+            }
+        }
+
+        // === POSTED DATE ===
+        // LinkedIn shows relative dates like "2 weeks ago", "3 days ago", "1 month ago"
+        // in the header area of the job detail page, often near "· X applicants"
+        const headerText2 = document.body.innerText.substring(0, 4000);
+        const datePatterns = [
+            /(\\d+)\\s+(second|minute|hour|day|week|month|year)s?\\s+ago/i,
+            /Reposted\\s+(\\d+)\\s+(day|week|month)s?\\s+ago/i,
+        ];
+        for (const pat of datePatterns) {
+            const m = headerText2.match(pat);
+            if (m) {
+                result.posted_at_text = m[0];
+                break;
+            }
+        }
+        // Also try <time> elements with datetime attribute
+        if (!result.posted_at_text) {
+            const timeEls = document.querySelectorAll('time[datetime]');
+            for (const t of timeEls) {
+                const dt = t.getAttribute('datetime');
+                if (dt && dt.length > 5) {
+                    result.posted_at_text = dt;
+                    break;
+                }
             }
         }
 
@@ -636,6 +707,12 @@ async def _discover_real(
                     else:
                         cleaned_desc = clean_description_rules(raw_desc)
 
+                    # Parse posted date from relative text
+                    posted_at_text = detail.get("posted_at_text", "")
+                    posted_at = _parse_relative_date(posted_at_text)
+                    if posted_at_text:
+                        logger.debug("Posted date text: '%s' → %s", posted_at_text, posted_at)
+
                     job_data: dict[str, Any] = {
                         "external_id": ext_id,
                         "url": detail_url,
@@ -644,6 +721,7 @@ async def _discover_real(
                         "location": detail.get("location") or card.get("location", ""),
                         "description_text": cleaned_desc,
                         "easy_apply": detail.get("easy_apply", False),
+                        "posted_at": posted_at,
                         "source": "linkedin",
                         "hash": job_hash(
                             external_id=ext_id,

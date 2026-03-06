@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Setup — AI Job Hunter{% endblock %}
+{% block content %}
+<div style="max-width: 640px; margin: 0 auto;">
+  {% if profile_exists %}
+  <h2>📄 Re-generate Profile</h2>
+  <div class="card" style="border-color: #f59e0b; background: #fffbeb; margin-bottom: 1.5rem;">
+    <p style="margin: 0;">⚠️ <strong>You already have a profile.</strong>
+       Uploading a new resume will <strong>overwrite</strong> your current
+       <code>user_profile.yml</code> and <code>profiles.yml</code>.
+       <a href="/profiles">View current profile →</a></p>
+  </div>
+  <p>Upload a new resume and/or LinkedIn URL to regenerate your profile and search profiles.</p>
+  {% else %}
+  <h2>👋 Welcome to AI Job Hunter</h2>
+  <p>Let's set up your profile. Upload your resume and optionally provide your LinkedIn profile URL.
+     The AI will analyse your background and generate tailored search profiles.</p>
+  {% endif %}
+
+  <div id="setup-form">
+    <form id="onboarding-form" enctype="multipart/form-data" onsubmit="startGeneration(event)">
+      <label>
+        Resume PDF <small>(required)</small>
+        <input type="file" name="resume" accept=".pdf" required id="resume-input">
+      </label>
+
+      <label>
+        LinkedIn Profile URL <small>(optional — improves results)</small>
+        <input type="url" name="linkedin_url" placeholder="https://www.linkedin.com/in/your-name/"
+               id="linkedin-input">
+      </label>
+
+      <button type="submit" id="generate-btn">🚀 Generate Profiles</button>
+    </form>
+  </div>
+
+  <!-- Progress area (hidden initially) -->
+  <div id="progress-area" style="display: none; margin-top: 1.5rem;">
+    <h3>⏳ Generating…</h3>
+    <progress id="gen-progress"></progress>
+    <div id="progress-log" style="margin-top: 1rem;"></div>
+  </div>
+
+  <!-- Results area (hidden initially) -->
+  <div id="results-area" style="display: none; margin-top: 1.5rem;">
+    <h3>✅ Profile Generated!</h3>
+    <div class="card" id="result-summary" style="margin-bottom: 1rem;"></div>
+    <div style="display: flex; gap: 0.5rem;">
+      <a href="/profiles" role="button">View & Edit Profiles →</a>
+      <a href="/" role="button" class="outline">Go to Dashboard</a>
+    </div>
+  </div>
+
+  <!-- Error area (hidden initially) -->
+  <div id="error-area" style="display: none; margin-top: 1.5rem;">
+    <div class="card" style="border-color: var(--pico-del-color);">
+      <p style="color: var(--pico-del-color); font-weight: 600;">❌ Generation Failed</p>
+      <p id="error-message"></p>
+      <button class="outline" onclick="resetForm()">Try Again</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function startGeneration(e) {
+  e.preventDefault();
+  var form = document.getElementById('onboarding-form');
+  var fd = new FormData(form);
+  var btn = document.getElementById('generate-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Uploading…';
+
+  document.getElementById('setup-form').style.display = 'none';
+  document.getElementById('progress-area').style.display = 'block';
+  document.getElementById('results-area').style.display = 'none';
+  document.getElementById('error-area').style.display = 'none';
+
+  fetch('/api/onboarding/generate', { method: 'POST', body: fd })
+    .then(function(r) {
+      return r.json().then(function(data) {
+        if (r.ok || r.status === 202) {
+          // Poll for completion via SSE
+          pollProgress();
+        } else {
+          showError(data.error || data.detail || 'Upload failed');
+        }
+      });
+    })
+    .catch(function(err) { showError('Network error: ' + err); });
+}
+
+function pollProgress() {
+  var log = document.getElementById('progress-log');
+  var es = new EventSource('/api/run/status');
+
+  es.onmessage = function(e) {
+    try {
+      var data = JSON.parse(e.data);
+      // Append log messages
+      if (data.log) {
+        log.textContent += data.log + '\n';
+        log.scrollTop = log.scrollHeight;
+      }
+    } catch(err) {}
+  };
+
+  // Also poll task-status endpoint
+  var interval = setInterval(function() {
+    fetch('/api/run/task-status').then(function(r) { return r.json(); })
+    .then(function(status) {
+      if (!status.running) {
+        clearInterval(interval);
+        es.close();
+        if (status.error) {
+          showError(status.error);
+        } else {
+          showResults(status.result);
+        }
+      }
+    });
+  }, 1500);
+}
+
+function showResults(result) {
+  document.getElementById('progress-area').style.display = 'none';
+  document.getElementById('results-area').style.display = 'block';
+
+  var summary = document.getElementById('result-summary');
+  if (result && result.user_profile) {
+    var up = result.user_profile;
+    summary.innerHTML =
+      '<p><strong>' + (up.name || 'Profile') + '</strong> — ' + (up.title || '') + '</p>' +
+      '<p>' + (up.summary || '') + '</p>' +
+      '<p><strong>Skills:</strong> ' + (up.skills || []).join(', ') + '</p>' +
+      '<p><strong>Experience:</strong> ' + (up.experience_years || 0) + ' years</p>' +
+      '<p><strong>Desired roles:</strong> ' + (up.desired_roles || []).join(', ') + '</p>';
+    if (result.search_profiles && result.search_profiles.length) {
+      summary.innerHTML += '<p><strong>Search profiles created:</strong> ' +
+        result.search_profiles.map(function(p) { return p.name; }).join(', ') + '</p>';
+    }
+  } else {
+    summary.innerHTML = '<p>Profiles generated successfully.</p>';
+  }
+}
+
+function showError(msg) {
+  document.getElementById('progress-area').style.display = 'none';
+  document.getElementById('error-area').style.display = 'block';
+  document.getElementById('error-message').textContent = msg;
+}
+
+function resetForm() {
+  document.getElementById('setup-form').style.display = 'block';
+  document.getElementById('error-area').style.display = 'none';
+  document.getElementById('generate-btn').disabled = false;
+  document.getElementById('generate-btn').textContent = '🚀 Generate Profiles';
+}
+</script>
+{% endblock %}
+
