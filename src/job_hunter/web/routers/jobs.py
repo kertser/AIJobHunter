@@ -91,6 +91,46 @@ async def get_job(job_hash: str, request: Request, session: Session = Depends(ge
     })
 
 
+# --- Bulk endpoints (must be before /{job_hash} routes) ---
+
+class BulkStatusUpdate(BaseModel):
+    hashes: list[str]
+    status: str
+
+
+@router.patch("/api/jobs/bulk/status")
+async def bulk_update_status(body: BulkStatusUpdate, session: Session = Depends(get_db)):
+    """Update status for multiple jobs in a single transaction."""
+    try:
+        new_status = JobStatus(body.status)
+    except ValueError:
+        raise HTTPException(400, f"Invalid status: {body.status}")
+    updated = 0
+    for h in body.hashes:
+        job = session.execute(select(Job).where(Job.hash == h)).scalar_one_or_none()
+        if job:
+            job.status = new_status
+            updated += 1
+    session.flush()
+    return {"updated": updated, "status": body.status}
+
+
+class BulkDelete(BaseModel):
+    hashes: list[str]
+
+
+@router.post("/api/jobs/bulk/delete")
+async def bulk_delete_jobs(body: BulkDelete, session: Session = Depends(get_db)):
+    """Delete multiple jobs in a single transaction."""
+    deleted = 0
+    for h in body.hashes:
+        if delete_job(session, h):
+            deleted += 1
+    return {"deleted": deleted}
+
+
+# --- Single job endpoints ---
+
 @router.patch("/api/jobs/{job_hash}/status")
 async def update_job_status(job_hash: str, body: StatusUpdate, session: Session = Depends(get_db)):
     job = session.execute(select(Job).where(Job.hash == job_hash)).scalar_one_or_none()

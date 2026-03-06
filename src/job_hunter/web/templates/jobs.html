@@ -13,12 +13,28 @@
       {% endfor %}
     </select>
   </label>
+  <span id="selection-count" style="color: var(--pico-muted-color); font-size: 0.85rem; display: none;">
+    <strong id="selected-num">0</strong> selected
+  </span>
+</div>
+
+<!-- Mass action toolbar (hidden until selection) -->
+<div id="mass-actions" style="display: none; margin-bottom: 1rem; padding: 0.75rem 1rem;
+     background: var(--pico-card-background-color); border-radius: var(--pico-border-radius);
+     border: 1px solid var(--pico-muted-border-color); gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+  <span style="font-weight: 600; margin-right: 0.5rem;">Bulk actions:</span>
+  <button class="action-btn outline" onclick="massAction('queued')">Queue</button>
+  <button class="action-btn outline secondary" onclick="massAction('skipped')">Skip</button>
+  <button class="action-btn outline" onclick="massAction('review')">Review</button>
+  <button class="action-btn outline" style="color: var(--pico-del-color); border-color: var(--pico-del-color);"
+          onclick="massDelete()">🗑 Delete</button>
 </div>
 
 <div style="overflow-x: auto;">
 <table>
   <thead>
     <tr>
+      <th style="width: 2rem;"><input type="checkbox" id="select-all" onclick="toggleAll(this)"></th>
       <th>Title</th>
       <th>Company</th>
       <th>Location</th>
@@ -32,6 +48,7 @@
   <tbody id="job-table-body">
     {% for job in jobs %}
     <tr id="job-row-{{ job.hash }}">
+      <td><input type="checkbox" class="job-checkbox" value="{{ job.hash }}" onclick="updateSelectionUI()"></td>
       <td><a href="/api/jobs/{{ job.hash }}">{{ job.title }}</a></td>
       <td>{{ job.company }}</td>
       <td>{{ job.location }}</td>
@@ -63,7 +80,7 @@
     </tr>
     {% endfor %}
     {% if not jobs %}
-    <tr><td colspan="8" style="text-align:center; color: var(--pico-muted-color);">No jobs found.</td></tr>
+    <tr><td colspan="9" style="text-align:center; color: var(--pico-muted-color);">No jobs found.</td></tr>
     {% endif %}
   </tbody>
 </table>
@@ -72,6 +89,108 @@
 
 {% block extra_scripts %}
 <script>
+// --- Selection helpers ---
+function getSelectedHashes() {
+  return Array.from(document.querySelectorAll('.job-checkbox:checked')).map(function(cb) { return cb.value; });
+}
+
+function updateSelectionUI() {
+  var selected = getSelectedHashes();
+  var count = selected.length;
+  var bar = document.getElementById('mass-actions');
+  var countEl = document.getElementById('selection-count');
+  var numEl = document.getElementById('selected-num');
+  if (count > 0) {
+    bar.style.display = 'flex';
+    countEl.style.display = 'inline';
+    numEl.textContent = count;
+  } else {
+    bar.style.display = 'none';
+    countEl.style.display = 'none';
+  }
+  // Update header checkbox state
+  var all = document.querySelectorAll('.job-checkbox');
+  var headerCb = document.getElementById('select-all');
+  if (all.length > 0 && count === all.length) {
+    headerCb.checked = true;
+    headerCb.indeterminate = false;
+  } else if (count > 0) {
+    headerCb.checked = false;
+    headerCb.indeterminate = true;
+  } else {
+    headerCb.checked = false;
+    headerCb.indeterminate = false;
+  }
+}
+
+function toggleAll(headerCb) {
+  var checkboxes = document.querySelectorAll('.job-checkbox');
+  for (var i = 0; i < checkboxes.length; i++) {
+    checkboxes[i].checked = headerCb.checked;
+  }
+  updateSelectionUI();
+}
+
+// --- Mass actions (single request, single DB transaction) ---
+function massAction(status) {
+  var hashes = getSelectedHashes();
+  if (!hashes.length) return;
+  if (!confirm('Set ' + hashes.length + ' job(s) to "' + status + '"?')) return;
+  fetch('/api/jobs/bulk/status', {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({hashes: hashes, status: status})
+  }).then(function(r) {
+    return r.json().then(function(data) {
+      if (r.ok) {
+        hashes.forEach(function(hash) {
+          var badge = document.getElementById('status-' + hash);
+          if (badge) {
+            badge.textContent = status;
+            badge.className = 'status-badge status-' + status;
+          }
+        });
+        showToast(data.updated + ' job(s) updated to ' + status);
+      } else {
+        showToast('Error: ' + (data.detail || 'update failed'));
+      }
+    });
+  }).catch(function(e) { showToast('Error: ' + e); })
+  .finally(function() {
+    document.querySelectorAll('.job-checkbox').forEach(function(cb) { cb.checked = false; });
+    document.getElementById('select-all').checked = false;
+    updateSelectionUI();
+  });
+}
+
+function massDelete() {
+  var hashes = getSelectedHashes();
+  if (!hashes.length) return;
+  if (!confirm('Delete ' + hashes.length + ' job(s) permanently?')) return;
+  fetch('/api/jobs/bulk/delete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({hashes: hashes})
+  }).then(function(r) {
+    return r.json().then(function(data) {
+      if (r.ok) {
+        hashes.forEach(function(hash) {
+          var row = document.getElementById('job-row-' + hash);
+          if (row) row.remove();
+        });
+        showToast(data.deleted + ' job(s) deleted');
+      } else {
+        showToast('Error: ' + (data.detail || 'delete failed'));
+      }
+    });
+  }).catch(function(e) { showToast('Error: ' + e); })
+  .finally(function() {
+    document.getElementById('select-all').checked = false;
+    updateSelectionUI();
+  });
+}
+
+// --- Single job actions ---
 function setStatus(hash, status) {
   fetch('/api/jobs/' + hash + '/status', {
     method: 'PATCH',

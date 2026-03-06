@@ -149,6 +149,39 @@ class TestJobs:
         r = client.delete("/api/jobs/nonexistent")
         assert r.status_code == 404
 
+    def test_bulk_status_update(self, client: TestClient) -> None:
+        h1 = job_hash(external_id="w1", title="Python Dev", company="Acme")
+        h3 = job_hash(external_id="w3", title="ML Engineer", company="Initech")
+        r = client.patch("/api/jobs/bulk/status", json={
+            "hashes": [h1, h3],
+            "status": "review",
+        })
+        assert r.status_code == 200
+        assert r.json()["updated"] == 2
+        # Verify both changed
+        r1 = client.get(f"/api/jobs/{h1}")
+        assert "review" in r1.text
+
+    def test_bulk_status_invalid(self, client: TestClient) -> None:
+        r = client.patch("/api/jobs/bulk/status", json={
+            "hashes": ["abc"],
+            "status": "invalid_status",
+        })
+        assert r.status_code == 400
+
+    def test_bulk_delete(self, client: TestClient) -> None:
+        h2 = job_hash(external_id="w2", title="Java Dev", company="Globex")
+        h3 = job_hash(external_id="w3", title="ML Engineer", company="Initech")
+        r = client.post("/api/jobs/bulk/delete", json={
+            "hashes": [h2, h3, "nonexistent"],
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["deleted"] == 2  # two real, one nonexistent
+        # Verify they're gone
+        assert client.get(f"/api/jobs/{h2}").status_code == 404
+        assert client.get(f"/api/jobs/{h3}").status_code == 404
+
 
 # ---------------------------------------------------------------------------
 # Settings

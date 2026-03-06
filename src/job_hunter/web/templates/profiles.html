@@ -3,64 +3,231 @@
 {% block content %}
 <h2>Profiles</h2>
 
+<!-- ======= User Profile ======= -->
 {% if user_profile %}
 <h3>User Profile</h3>
-<form hx-put="/api/user-profile" hx-swap="none" hx-headers='{"Content-Type": "application/json"}'
-      onsubmit="event.preventDefault(); fetch('/api/user-profile', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(Object.fromEntries(new FormData(this)))}).then(()=>showToast('Profile saved!'));">
+<form id="user-profile-form" onsubmit="saveUserProfile(event)">
   <div class="grid">
     <label>Name <input name="name" value="{{ user_profile.name }}"></label>
     <label>Title <input name="title" value="{{ user_profile.title }}"></label>
   </div>
   <label>Summary <textarea name="summary" rows="3">{{ user_profile.summary }}</textarea></label>
   <div class="grid">
-    <label>Skills (comma-separated) <input name="skills" value="{{ user_profile.skills | join(', ') }}"></label>
-    <label>Experience (years) <input name="experience_years" type="number" value="{{ user_profile.experience_years }}"></label>
+    <label>Skills <small>(comma-separated)</small>
+      <input name="skills" value="{{ user_profile.skills | join(', ') }}">
+    </label>
+    <label>Experience (years)
+      <input name="experience_years" type="number" value="{{ user_profile.experience_years }}">
+    </label>
   </div>
   <div class="grid">
-    <label>Seniority <input name="seniority_level" value="{{ user_profile.seniority_level }}"></label>
-    <label>Desired Roles <input name="desired_roles" value="{{ user_profile.desired_roles | join(', ') }}"></label>
+    <label>Seniority Level <input name="seniority_level" value="{{ user_profile.seniority_level }}"></label>
+    <label>Desired Roles <small>(comma-separated)</small>
+      <input name="desired_roles" value="{{ user_profile.desired_roles | join(', ') }}">
+    </label>
   </div>
   <div class="grid">
-    <label>Preferred Locations <input name="preferred_locations" value="{{ user_profile.preferred_locations | join(', ') }}"></label>
-    <label>Education <input name="education" value="{{ user_profile.education | join(', ') }}"></label>
+    <label>Preferred Locations <small>(comma-separated)</small>
+      <input name="preferred_locations" value="{{ user_profile.preferred_locations | join(', ') }}">
+    </label>
+    <label>Education <small>(comma-separated)</small>
+      <input name="education" value="{{ user_profile.education | join(', ') }}">
+    </label>
   </div>
-  <label>Languages <input name="languages" value="{{ user_profile.languages | join(', ') }}"></label>
-  <button type="submit">Save User Profile</button>
+  <label>Languages <small>(comma-separated)</small>
+    <input name="languages" value="{{ user_profile.languages | join(', ') }}">
+  </label>
+  <button type="submit">💾 Save User Profile</button>
 </form>
 {% else %}
 <p>No user profile found. Run <code>hunt profile --resume your_resume.pdf</code> to generate one.</p>
 {% endif %}
 
 <hr>
-<h3>Search Profiles</h3>
 
+<!-- ======= Search Profiles ======= -->
+<div style="display: flex; justify-content: space-between; align-items: center;">
+  <h3 style="margin: 0;">Search Profiles</h3>
+  <button class="outline" onclick="addProfile()">+ Add Profile</button>
+</div>
+
+<div id="profiles-container">
 {% if search_profiles %}
 {% for sp in search_profiles %}
-<details style="margin-bottom: 1rem;">
-  <summary><strong>{{ sp.name }}</strong> — {{ sp.keywords | join(', ') }} ({{ sp.location or 'any location' }})</summary>
-  <div class="card" style="margin-top: 0.5rem;">
-    <div class="grid">
-      <div><strong>Keywords:</strong> {{ sp.keywords | join(', ') }}</div>
-      <div><strong>Location:</strong> {{ sp.location or '—' }}</div>
-    </div>
-    <div class="grid">
-      <div><strong>Remote:</strong> {{ '✅' if sp.remote else '❌' }}</div>
-      <div><strong>Seniority:</strong> {{ sp.seniority | join(', ') or '—' }}</div>
-    </div>
-    <div class="grid">
-      <div><strong>Min Fit Score:</strong> {{ sp.min_fit_score }}</div>
-      <div><strong>Min Similarity:</strong> {{ sp.min_similarity }}</div>
-    </div>
-    <div class="grid">
-      <div><strong>Max Apps/Day:</strong> {{ sp.max_applications_per_day }}</div>
-      <div><strong>Blacklist Companies:</strong> {{ sp.blacklist_companies | join(', ') or '—' }}</div>
-    </div>
-    <p><strong>Blacklist Titles:</strong> {{ sp.blacklist_titles | join(', ') or '—' }}</p>
+<details class="profile-card" style="margin-top: 1rem;" {% if loop.first %}open{% endif %}>
+  <summary>
+    <strong>{{ sp.name }}</strong> — {{ sp.keywords | join(', ') }} ({{ sp.location or 'any location' }})
+  </summary>
+  <div class="card" style="margin-top: 0.5rem; padding: 1rem;">
+    <form class="search-profile-form" data-index="{{ loop.index0 }}" onsubmit="event.preventDefault();">
+      <div class="grid">
+        <label>Profile Name
+          <input name="name" value="{{ sp.name }}" required>
+        </label>
+        <label>Location
+          <input name="location" value="{{ sp.location }}">
+        </label>
+      </div>
+      <label>Keywords <small>(comma-separated)</small>
+        <input name="keywords" value="{{ sp.keywords | join(', ') }}">
+      </label>
+      <div class="grid">
+        <label>
+          <input type="checkbox" name="remote" {% if sp.remote %}checked{% endif %}>
+          Remote
+        </label>
+        <label>Seniority <small>(comma-separated)</small>
+          <input name="seniority" value="{{ sp.seniority | join(', ') }}">
+        </label>
+      </div>
+      <div class="grid">
+        <label>Min Fit Score
+          <input name="min_fit_score" type="number" min="0" max="100" value="{{ sp.min_fit_score }}">
+        </label>
+        <label>Min Similarity
+          <input name="min_similarity" type="number" step="0.01" min="0" max="1" value="{{ sp.min_similarity }}">
+        </label>
+        <label>Max Apps/Day
+          <input name="max_applications_per_day" type="number" min="0" value="{{ sp.max_applications_per_day }}">
+        </label>
+      </div>
+      <div class="grid">
+        <label>Blacklist Companies <small>(comma-separated)</small>
+          <input name="blacklist_companies" value="{{ sp.blacklist_companies | join(', ') }}">
+        </label>
+        <label>Blacklist Titles <small>(comma-separated)</small>
+          <input name="blacklist_titles" value="{{ sp.blacklist_titles | join(', ') }}">
+        </label>
+      </div>
+      <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+        <button type="button" class="outline" style="color: var(--pico-del-color); border-color: var(--pico-del-color);"
+                onclick="removeProfile(this)">🗑 Remove</button>
+      </div>
+    </form>
   </div>
 </details>
 {% endfor %}
 {% else %}
-<p>No search profiles found. Run <code>hunt profile --resume your_resume.pdf</code> to generate them.</p>
+<p id="no-profiles-msg" style="color: var(--pico-muted-color); margin-top: 1rem;">
+  No search profiles found. Click "Add Profile" to create one.
+</p>
 {% endif %}
+</div>
+
+<div style="margin-top: 1.5rem;">
+  <button onclick="saveAllProfiles()">💾 Save All Search Profiles</button>
+</div>
 {% endblock %}
 
+{% block extra_scripts %}
+<script>
+// --- User Profile ---
+function csvToList(val) {
+  return val ? val.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [];
+}
+
+function saveUserProfile(e) {
+  e.preventDefault();
+  var form = document.getElementById('user-profile-form');
+  var fd = new FormData(form);
+  var data = {
+    name: fd.get('name') || '',
+    title: fd.get('title') || '',
+    summary: fd.get('summary') || '',
+    skills: csvToList(fd.get('skills')),
+    experience_years: parseInt(fd.get('experience_years')) || 0,
+    seniority_level: fd.get('seniority_level') || '',
+    desired_roles: csvToList(fd.get('desired_roles')),
+    preferred_locations: csvToList(fd.get('preferred_locations')),
+    education: csvToList(fd.get('education')),
+    languages: csvToList(fd.get('languages')),
+  };
+  fetch('/api/user-profile', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data)
+  }).then(function(r) {
+    if (r.ok) showToast('User profile saved!');
+    else r.text().then(function(t) { showToast('Error: ' + t); });
+  }).catch(function(e) { showToast('Error: ' + e); });
+}
+
+// --- Search Profiles ---
+function collectProfileFromForm(form) {
+  var fd = new FormData(form);
+  return {
+    name: fd.get('name') || 'unnamed',
+    keywords: csvToList(fd.get('keywords')),
+    location: fd.get('location') || '',
+    remote: form.querySelector('[name="remote"]').checked,
+    seniority: csvToList(fd.get('seniority')),
+    min_fit_score: parseInt(fd.get('min_fit_score')) || 75,
+    min_similarity: parseFloat(fd.get('min_similarity')) || 0.35,
+    max_applications_per_day: parseInt(fd.get('max_applications_per_day')) || 25,
+    blacklist_companies: csvToList(fd.get('blacklist_companies')),
+    blacklist_titles: csvToList(fd.get('blacklist_titles')),
+  };
+}
+
+function saveAllProfiles() {
+  var forms = document.querySelectorAll('.search-profile-form');
+  var profiles = [];
+  forms.forEach(function(form) {
+    profiles.push(collectProfileFromForm(form));
+  });
+  fetch('/api/profiles', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({profiles: profiles})
+  }).then(function(r) {
+    if (r.ok) showToast('Saved ' + profiles.length + ' search profile(s)!');
+    else r.text().then(function(t) { showToast('Error: ' + t); });
+  }).catch(function(e) { showToast('Error: ' + e); });
+}
+
+function addProfile() {
+  var container = document.getElementById('profiles-container');
+  var noMsg = document.getElementById('no-profiles-msg');
+  if (noMsg) noMsg.remove();
+
+  var idx = container.querySelectorAll('.profile-card').length;
+  var html = '<details class="profile-card" style="margin-top: 1rem;" open>'
+    + '<summary><strong>New Profile</strong> — (click to configure)</summary>'
+    + '<div class="card" style="margin-top: 0.5rem; padding: 1rem;">'
+    + '<form class="search-profile-form" data-index="' + idx + '" onsubmit="event.preventDefault();">'
+    + '<div class="grid">'
+    + '<label>Profile Name <input name="name" value="" placeholder="e.g. backend-python" required></label>'
+    + '<label>Location <input name="location" value="" placeholder="e.g. Remote, New York"></label>'
+    + '</div>'
+    + '<label>Keywords <small>(comma-separated)</small>'
+    + '<input name="keywords" value="" placeholder="e.g. Python Developer, Backend Engineer"></label>'
+    + '<div class="grid">'
+    + '<label><input type="checkbox" name="remote"> Remote</label>'
+    + '<label>Seniority <small>(comma-separated)</small>'
+    + '<input name="seniority" value="" placeholder="e.g. Senior, Mid-Senior"></label>'
+    + '</div>'
+    + '<div class="grid">'
+    + '<label>Min Fit Score <input name="min_fit_score" type="number" min="0" max="100" value="75"></label>'
+    + '<label>Min Similarity <input name="min_similarity" type="number" step="0.01" min="0" max="1" value="0.35"></label>'
+    + '<label>Max Apps/Day <input name="max_applications_per_day" type="number" min="0" value="25"></label>'
+    + '</div>'
+    + '<div class="grid">'
+    + '<label>Blacklist Companies <small>(comma-separated)</small> <input name="blacklist_companies" value=""></label>'
+    + '<label>Blacklist Titles <small>(comma-separated)</small> <input name="blacklist_titles" value=""></label>'
+    + '</div>'
+    + '<div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">'
+    + '<button type="button" class="outline" style="color: var(--pico-del-color); border-color: var(--pico-del-color);"'
+    + ' onclick="removeProfile(this)">🗑 Remove</button>'
+    + '</div>'
+    + '</form></div></details>';
+  container.insertAdjacentHTML('beforeend', html);
+}
+
+function removeProfile(btn) {
+  var card = btn.closest('.profile-card');
+  if (card && confirm('Remove this profile?')) {
+    card.remove();
+  }
+}
+</script>
+{% endblock %}

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from job_hunter.linkedin.parse import parse_job_cards, parse_job_detail
+from job_hunter.matching.description_cleaner import clean_description_rules
 from job_hunter.utils.hashing import job_hash
 
 logger = logging.getLogger("job_hunter.linkedin.discover")
@@ -161,6 +162,55 @@ async def _extract_jobs_via_js(page: Any) -> list[dict[str, Any]]:
     except Exception as exc:
         logger.warning("JS extraction failed: %s", exc)
         return []
+
+
+async def _expand_all_show_more(page: Any) -> None:
+    """Click all 'Show more' / '… more' / 'See more' buttons on the page.
+
+    LinkedIn truncates job descriptions with a "… more" or "Show more" link.
+    This expands them all so the full text is available for extraction.
+    """
+    try:
+        # Use JS to find and click all expandable elements
+        clicked = await page.evaluate("""
+            () => {
+                let count = 0;
+                // Strategy 1: buttons/links with "show more" / "see more" text
+                const allClickable = document.querySelectorAll(
+                    'button, a, span[role="button"], [class*="show-more"]'
+                );
+                for (const el of allClickable) {
+                    const text = el.innerText.trim().toLowerCase();
+                    if (text === 'show more' || text === '… more' || text === '...more'
+                        || text === 'see more' || text === '\u2026 more'
+                        || text === 'more' || text.endsWith('… more')) {
+                        el.click();
+                        count++;
+                    }
+                }
+                // Strategy 2: LinkedIn's specific show-more-less button
+                const showMoreBtns = document.querySelectorAll(
+                    'button.show-more-less-html__button, ' +
+                    'button[aria-label="Show more"], ' +
+                    'button[aria-label="show more"], ' +
+                    'a.show-more-less-html__button--more, ' +
+                    'footer button[aria-label*="more"]'
+                );
+                for (const btn of showMoreBtns) {
+                    if (!btn.classList.contains('show-more-less-html__button--less')) {
+                        btn.click();
+                        count++;
+                    }
+                }
+                return count;
+            }
+        """)
+        if clicked:
+            logger.debug("Clicked %d 'show more' buttons", clicked)
+            # Wait for content to expand
+            await page.wait_for_timeout(1500)
+    except Exception as exc:
+        logger.debug("Failed to expand show-more: %s", exc)
 
 
 async def _extract_detail_via_js(page: Any) -> dict[str, Any]:
@@ -538,6 +588,10 @@ async def _discover_real(
                             logger.warning("Challenge detected on detail page! Stopping.")
                             return jobs
 
+                        # Click all "Show more" / "… more" / "See more" buttons
+                        # to expand truncated description sections
+                        await _expand_all_show_more(page)
+
                         # Save first detail page HTML for debugging
                         if len(seen_ids) <= 1:
                             detail_html_debug = await page.content()
@@ -569,7 +623,9 @@ async def _discover_real(
                         "title": detail.get("title") or card.get("title", ""),
                         "company": detail.get("company") or card.get("company", ""),
                         "location": detail.get("location") or card.get("location", ""),
-                        "description_text": detail.get("description_text", ""),
+                        "description_text": clean_description_rules(
+                            detail.get("description_text", "")
+                        ),
                         "easy_apply": detail.get("easy_apply", False),
                         "source": "linkedin",
                         "hash": job_hash(

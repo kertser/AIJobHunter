@@ -586,7 +586,8 @@ AIJobHunter/
 │   ├── matching/
 │   │   ├── embeddings.py                 # Embedding providers (+ FakeEmbedder)
 │   │   ├── llm_eval.py                   # LLM evaluators (+ FakeLLMEvaluator)
-│   │   └── scoring.py                    # Combined scoring + decision logic
+│   │   ├── scoring.py                    # Combined scoring + decision logic
+│   │   └── description_cleaner.py        # Rule-based + LLM description cleanup
 │   │
 │   ├── orchestration/
 │   │   ├── pipeline.py                   # discover → score → apply → report
@@ -626,7 +627,8 @@ AIJobHunter/
 │   ├── test_pipeline.py                  # Pipeline orchestration + policies
 │   ├── test_reporting.py                 # Report generation (MD + JSON)
 │   ├── test_linkedin_session.py          # Session cookies + search URLs
-│   ├── test_web.py                       # Web GUI endpoints (21 tests)
+│   ├── test_web.py                       # Web GUI endpoints (24 tests)
+│   ├── test_description_cleaner.py       # Description cleanup (7 tests)
 │   └── fixtures/
 │       ├── resume.txt                    # Sample resume text
 │       └── profiles.yml                  # Sample search profiles
@@ -659,7 +661,7 @@ uv run pytest tests/test_profile_generation.py -v
 uv run pytest -k "test_upsert" -v
 ```
 
-**Current test suite:** 145 passed, 0 skipped.
+**Current test suite:** 155 passed, 0 skipped.
 
 All tests run offline with no API keys or network access required.
 
