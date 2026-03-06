@@ -24,7 +24,7 @@ async def discover_jobs(
     location: str = "",
     remote: bool = False,
     seniority: list[str] | None = None,
-    max_pages: int = 3,
+    max_pages: int = 10,
 ) -> list[dict[str, Any]]:
     """Discover jobs matching the given profile.
 
@@ -263,13 +263,44 @@ async def _extract_detail_via_js(page: Any) -> dict[str, Any]:
         }
 
         // --- Easy Apply ---
-        const applyBtn = document.querySelector(
-            'button.jobs-apply-button, button[aria-label*="Easy Apply"], ' +
-            'button[class*="apply"]'
-        );
-        if (applyBtn) {
-            const txt = applyBtn.innerText.toLowerCase();
-            result.easy_apply = txt.includes('easy apply') || txt.includes('apply');
+        // Strategy 1: Look for the Easy Apply button by selector
+        const applyBtnSels = [
+            'button.jobs-apply-button',
+            'button[aria-label*="Easy Apply"]',
+            'button.jobs-apply-button--top-card',
+            'button.jobs-s-apply',
+        ];
+        for (const sel of applyBtnSels) {
+            const el = document.querySelector(sel);
+            if (el) {
+                const txt = el.innerText.toLowerCase();
+                if (txt.includes('easy apply') || txt.includes('apply')) {
+                    result.easy_apply = true;
+                    break;
+                }
+            }
+        }
+        // Strategy 2: Search for "Easy Apply" text in the top card area
+        if (!result.easy_apply) {
+            const topCardSels = [
+                '[class*="top-card"]', '[class*="topcard"]',
+                '[class*="unified-top"]', '.job-details-jobs-unified-top-card',
+            ];
+            for (const sel of topCardSels) {
+                const el = document.querySelector(sel);
+                if (el && el.innerText.includes('Easy Apply')) {
+                    result.easy_apply = true;
+                    break;
+                }
+            }
+        }
+        // Strategy 3: Check if "Easy Apply" appears anywhere in page header
+        if (!result.easy_apply) {
+            // Look in the first ~2000 chars of page text (above the description)
+            const bodyText = document.body.innerText.substring(0, 3000);
+            if (bodyText.includes('Easy Apply')) {
+                result.easy_apply = true;
+            }
         }
 
         // --- Description ---
@@ -379,7 +410,7 @@ async def _discover_real(
     location: str = "",
     remote: bool = False,
     seniority: list[str] | None = None,
-    max_pages: int = 3,
+    max_pages: int = 10,
 ) -> list[dict[str, Any]]:
     """Run discovery against real LinkedIn using saved cookies."""
     from playwright.async_api import async_playwright

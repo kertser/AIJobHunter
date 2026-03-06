@@ -133,7 +133,7 @@ async def run_score(request: Request):
     params = _load_run_params(settings)
 
     from job_hunter.db.models import JobStatus, Score
-    from job_hunter.db.repo import get_jobs_by_status, make_session, save_score
+    from job_hunter.db.repo import make_session, save_score
     from job_hunter.matching.embeddings import FakeEmbedder, OpenAIEmbedder
     from job_hunter.matching.llm_eval import FakeLLMEvaluator, OpenAILLMEvaluator
     from job_hunter.matching.scoring import compute_score, decide_job_status, decision_to_db
@@ -154,13 +154,25 @@ async def run_score(request: Request):
             embedder = OpenAIEmbedder(api_key=api_key)
             evaluator = OpenAILLMEvaluator(api_key=api_key)
 
-        new_jobs = get_jobs_by_status(session, JobStatus.NEW)
-        if not new_jobs:
-            session.close()
-            return {"scored": 0, "message": "No NEW jobs to score"}
+        # Find all jobs that don't have a Score record yet
+        from sqlalchemy import select
+        from job_hunter.db.models import Job
+        all_jobs = session.execute(select(Job)).scalars().all()
+        scored_hashes = set(
+            row[0] for row in session.execute(select(Score.job_hash)).all()
+        )
+        unscored_jobs = [j for j in all_jobs if j.hash not in scored_hashes]
 
+        if not unscored_jobs:
+            session.close()
+            return {"scored": 0, "message": "All jobs already scored"}
+
+        logger.info("Found %d unscored jobs to process", len(unscored_jobs))
         scored = 0
-        for job in new_jobs:
+        for job in unscored_jobs:
+            if not job.description_text:
+                logger.warning("Skipping %s (%s) — no description", job.hash, job.title)
+                continue
             result = compute_score(
                 resume_text=params.get("resume_text", ""),
                 job_description=job.description_text or "",

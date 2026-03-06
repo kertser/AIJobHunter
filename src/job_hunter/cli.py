@@ -263,7 +263,7 @@ def score(
     """Compute fit-scores for discovered jobs."""
     from job_hunter.config.loader import load_user_profile as _load_up
     from job_hunter.db.models import Job, JobStatus, Score
-    from job_hunter.db.repo import get_engine, get_jobs_by_status, make_session, save_score
+    from job_hunter.db.repo import get_engine, make_session, save_score
     from job_hunter.matching.embeddings import Embedder, FakeEmbedder, OpenAIEmbedder
     from job_hunter.matching.llm_eval import FakeLLMEvaluator, LLMEvaluator, OpenAILLMEvaluator
     from job_hunter.matching.scoring import compute_score, decide_job_status, decision_to_db
@@ -321,24 +321,32 @@ def score(
         embedder = OpenAIEmbedder(api_key=api_key)
         evaluator = OpenAILLMEvaluator(api_key=api_key)
 
-    # --- Score all NEW jobs ---
+    # --- Score all unscored jobs ---
     engine = get_engine(settings.data_dir)
     init_db(engine)
     session = make_session(engine)
 
-    new_jobs = get_jobs_by_status(session, JobStatus.NEW)
-    if not new_jobs:
-        rprint("[yellow]No new jobs to score.[/yellow]")
+    from sqlalchemy import select
+    all_jobs = session.execute(select(Job)).scalars().all()
+    scored_hashes = set(
+        row[0] for row in session.execute(select(Score.job_hash)).all()
+    )
+    unscored_jobs = [j for j in all_jobs if j.hash not in scored_hashes]
+    if not unscored_jobs:
+        rprint("[yellow]All jobs already scored.[/yellow]")
         return
 
-    rprint(f"[bold]Scoring {len(new_jobs)} job(s)…[/bold]")
+    rprint(f"[bold]Scoring {len(unscored_jobs)} job(s)…[/bold]")
 
     scored = 0
     queued = 0
     skipped = 0
     review = 0
 
-    for job in new_jobs:
+    for job in unscored_jobs:
+        if not job.description_text:
+            rprint(f"  [dim]Skipping {job.title} — no description[/dim]")
+            continue
         result = compute_score(
             resume_text=resume_text,
             job_description=job.description_text,

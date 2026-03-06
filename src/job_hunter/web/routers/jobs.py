@@ -32,7 +32,8 @@ async def jobs_page(request: Request, session: Session = Depends(get_db), status
     jobs = session.execute(query).scalars().all()
     hashes = [j.hash for j in jobs]
     scores_map = get_scores_for_jobs(session, hashes)
-    statuses = [s.value for s in JobStatus]
+    # Show only statuses that are actually used in the pipeline
+    statuses = [s.value for s in JobStatus if s != JobStatus.SCORED]
     return templates.TemplateResponse(request, "jobs.html", {
         "jobs": jobs, "scores_map": scores_map,
         "statuses": statuses, "current_status": status,
