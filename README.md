@@ -30,6 +30,8 @@ job passes your thresholds — applies via Easy Apply automatically.
 
 ---
 
+![Demo](docs/demo.gif)
+
 ## Features
 
 | Feature | Description |
