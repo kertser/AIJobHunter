@@ -10,30 +10,113 @@
   <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
   <style>
     :root { --pico-font-size: 15px; }
-    nav { background: var(--pico-primary-background); padding: 0.5rem 1rem; }
-    nav ul { list-style: none; display: flex; gap: 1rem; margin: 0; padding: 0; align-items: center; }
-    nav a { color: var(--pico-primary-inverse); text-decoration: none; font-weight: 500; }
-    nav a:hover { text-decoration: underline; }
-    nav .brand { font-size: 1.1rem; font-weight: 700; margin-right: 1.5rem; }
-    .status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; }
-    .status-new { background: #dbeafe; color: #1e40af; }
-    .status-scored { background: #e0e7ff; color: #4338ca; }
-    .status-queued { background: #fef3c7; color: #92400e; }
+
+    /* ── Navigation ──────────────────────────────── */
+    nav {
+      background: linear-gradient(135deg, #1e3a5f 0%, #1a2744 100%);
+      padding: 0 1.2rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      position: sticky; top: 0; z-index: 50;
+    }
+    nav ul {
+      list-style: none; display: flex; margin: 0; padding: 0;
+      align-items: stretch; flex-wrap: wrap; gap: 0;
+    }
+    nav li { display: flex; align-items: stretch; }
+    nav a {
+      color: rgba(255,255,255,0.78); text-decoration: none;
+      font-weight: 500; font-size: 0.82rem;
+      padding: 0.7rem 0.65rem;
+      display: flex; align-items: center; gap: 0.3rem;
+      transition: color 0.15s, background 0.15s;
+      border-bottom: 2px solid transparent;
+    }
+    nav a:hover { color: #fff; background: rgba(255,255,255,0.07); text-decoration: none; }
+    nav a.nav-active { color: #fff; background: rgba(255,255,255,0.1); border-bottom-color: #60a5fa; }
+    nav .brand {
+      font-size: 1rem; font-weight: 700; letter-spacing: -0.3px;
+      color: #fff; margin-right: 0.4rem; padding-right: 0.7rem;
+      border-bottom: none;
+    }
+    nav .brand:hover { background: transparent; }
+    nav .sep {
+      width: 1px; align-self: center; height: 18px;
+      background: rgba(255,255,255,0.15); margin: 0 0.1rem;
+    }
+
+    /* ── Tooltips (data-tip) ─────────────────────── */
+    [data-tip] { position: relative; }
+    [data-tip]::after {
+      content: attr(data-tip);
+      position: absolute; left: 50%; top: calc(100% + 6px);
+      transform: translateX(-50%) scale(0.96);
+      background: #0f172a; color: #e2e8f0;
+      padding: 5px 10px; border-radius: 6px;
+      font-size: 0.72rem; font-weight: 400; line-height: 1.4;
+      white-space: nowrap; z-index: 200;
+      pointer-events: none;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.28);
+      opacity: 0; visibility: hidden;
+      transition: opacity 0.12s, transform 0.12s;
+    }
+    [data-tip]:hover::after {
+      opacity: 1; visibility: visible;
+      transform: translateX(-50%) scale(1);
+    }
+
+    /* ── Status badges ───────────────────────────── */
+    .status-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 10px;
+      font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .status-new     { background: #dbeafe; color: #1e40af; }
+    .status-scored  { background: #e0e7ff; color: #4338ca; }
+    .status-queued  { background: #fef3c7; color: #92400e; }
     .status-applied { background: #d1fae5; color: #065f46; }
     .status-skipped { background: #f3f4f6; color: #6b7280; }
-    .status-review { background: #fef9c3; color: #854d0e; }
+    .status-review  { background: #fef9c3; color: #854d0e; }
     .status-blocked { background: #fee2e2; color: #991b1b; }
-    .status-failed { background: #fecaca; color: #dc2626; }
-    .card { border: 1px solid var(--pico-muted-border-color); border-radius: 8px; padding: 1.2rem; }
-    .cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; }
+    .status-failed  { background: #fecaca; color: #dc2626; }
+
+    /* ── Cards ────────────────────────────────────── */
+    .card {
+      border: 1px solid var(--pico-muted-border-color);
+      border-radius: 10px; padding: 1.2rem;
+      transition: box-shadow 0.15s;
+    }
+    .card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 0.85rem;
+    }
     .stat-number { font-size: 2rem; font-weight: 700; margin: 0; }
-    .stat-label { color: var(--pico-muted-color); font-size: 0.85rem; }
-    .toast { position: fixed; bottom: 1rem; right: 1rem; z-index: 999; padding: 0.8rem 1.2rem; border-radius: 6px; background: #065f46; color: white; display: none; }
-    .toast.show { display: block; animation: fadeIn 0.3s; }
-    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-    #progress-log { max-height: 300px; overflow-y: auto; background: #1e293b; color: #e2e8f0; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; }
-    table { font-size: 0.9rem; }
-    .action-btn { padding: 4px 10px; font-size: 0.75rem; cursor: pointer; }
+    .stat-label  { color: var(--pico-muted-color); font-size: 0.82rem; margin: 0; }
+
+    /* ── Toast ────────────────────────────────────── */
+    .toast {
+      position: fixed; bottom: 1.2rem; right: 1.2rem; z-index: 999;
+      padding: 0.7rem 1.2rem; border-radius: 8px;
+      background: #065f46; color: white; font-size: 0.85rem;
+      display: none; box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    }
+    .toast.show { display: block; animation: toastIn 0.25s ease; }
+    @keyframes toastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+    /* ── Misc ─────────────────────────────────────── */
+    #progress-log {
+      max-height: 300px; overflow-y: auto;
+      background: #0f172a; color: #e2e8f0;
+      padding: 1rem; border-radius: 8px;
+      font-family: 'Consolas','Monaco',monospace; font-size: 0.82rem;
+      white-space: pre-wrap; line-height: 1.5;
+    }
+    table { font-size: 0.88rem; }
+    .action-btn {
+      padding: 4px 10px; font-size: 0.75rem; cursor: pointer;
+      border-radius: 6px; transition: opacity 0.15s;
+    }
+    .action-btn:hover { opacity: 0.85; }
   </style>
   {% block extra_head %}{% endblock %}
 </head>
@@ -41,13 +124,16 @@
   <nav>
     <ul>
       <li><a href="/" class="brand">🎯 AI Job Hunter</a></li>
-      <li><a href="/">Dashboard</a></li>
-      <li><a href="/jobs">Jobs</a></li>
-      <li><a href="/profiles">Profiles</a></li>
-      <li><a href="/run">Run</a></li>
-      <li><a href="/reports">Reports</a></li>
-      <li><a href="/settings">Settings</a></li>
-      <li><a href="/onboarding" style="opacity: 0.85;">📄 Setup</a></li>
+      <li><a href="/"              data-tip="Overview stats &amp; quick actions">📊 Dashboard</a></li>
+      <li><a href="/jobs"          data-tip="Browse, filter &amp; manage jobs">💼 Jobs</a></li>
+      <li><a href="/run"           data-tip="Discover → Score → Apply">▶️ Pipeline</a></li>
+      <li><span class="sep"></span></li>
+      <li><a href="/profiles"      data-tip="Profile &amp; search preferences">👤 Profiles</a></li>
+      <li><a href="/resume-review" data-tip="AI resume gap analysis">📝 Review</a></li>
+      <li><a href="/reports"       data-tip="Daily summary reports">📈 Reports</a></li>
+      <li><span class="sep"></span></li>
+      <li><a href="/settings"      data-tip="API keys, mode, log level">⚙️ Settings</a></li>
+      <li><a href="/onboarding"    data-tip="Upload resume &amp; generate profiles">🚀 Setup</a></li>
     </ul>
   </nav>
 
@@ -59,13 +145,20 @@
 
   <script>
     function showToast(msg, ms) {
-      const t = document.getElementById('toast');
+      var t = document.getElementById('toast');
       t.textContent = msg;
       t.classList.add('show');
-      setTimeout(() => t.classList.remove('show'), ms || 3000);
+      setTimeout(function() { t.classList.remove('show'); }, ms || 3000);
     }
+    (function() {
+      var path = window.location.pathname;
+      document.querySelectorAll('nav a:not(.brand)').forEach(function(a) {
+        var href = a.getAttribute('href');
+        if (href === '/' && path === '/') a.classList.add('nav-active');
+        else if (href !== '/' && path.startsWith(href)) a.classList.add('nav-active');
+      });
+    })();
   </script>
   {% block extra_scripts %}{% endblock %}
 </body>
 </html>
-

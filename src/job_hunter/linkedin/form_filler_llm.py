@@ -173,7 +173,12 @@ def build_profile_context(profile: dict[str, Any] | None = None) -> str:
         parts.append(f"Total years of experience: {profile['experience_years']}")
     if profile.get("education"):
         parts.append(f"Education: {'; '.join(profile['education'])}")
-    if profile.get("languages"):
+    if profile.get("spoken_languages"):
+        parts.append(f"Spoken languages: {', '.join(profile['spoken_languages'])}")
+    if profile.get("programming_languages"):
+        parts.append(f"Programming languages: {', '.join(profile['programming_languages'])}")
+    # Backward compat
+    if not profile.get("spoken_languages") and profile.get("languages"):
         parts.append(f"Languages: {', '.join(profile['languages'])}")
     if profile.get("preferred_locations"):
         parts.append(f"Preferred locations: {', '.join(profile['preferred_locations'])}")

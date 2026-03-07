@@ -1,11 +1,4 @@
-- env openai key shall be taken from .env file
-- Change "Easy Apply" button to be more visible and intuitive, perhaps with a different color or icon
+TODO:
 - Add automated daily discover+score+apply cycle with GUI controls for scheduling and pausing
 - Email/Slack notifications - Notify when new high-fit jobs are found.
-- Add Resume review\improvement tool to GUI. May be built with Top Missing Skills or similar approach to identify resume gaps for target jobs
-- Add preferences for job areas, companies, etc. to further filter discovered jobs
-- Allow users to specify preferred job titles, locations, companies, etc. to prioritize certain job matches
-- Fix "languages" - spoken, not programming languages
-- Sort jobs by default - by date posted. Save last sort method used.
-- "Archive" old jobs that have been applied to or are no longer relevant, to keep the job list clean
-- Update Readme
+- Save last jobs sort preference used.

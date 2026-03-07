@@ -24,6 +24,7 @@ def compute_score(
     job_description: str,
     embedder: Embedder,
     llm_evaluator: LLMEvaluator,
+    user_preferences: dict | None = None,
 ) -> dict:
     """Compute a combined score for a job against a resume.
 
@@ -34,7 +35,7 @@ def compute_score(
     job_emb = embedder.embed(job_description)
     similarity = embedder.similarity(resume_emb, job_emb)
 
-    llm_result = llm_evaluator.evaluate(resume_text, job_description)
+    llm_result = llm_evaluator.evaluate(resume_text, job_description, user_preferences=user_preferences)
 
     return {
         "embedding_similarity": similarity,

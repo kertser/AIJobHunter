@@ -48,6 +48,7 @@ async def run_pipeline(
     blacklist_titles: list[str] | None = None,
     resume_text: str = "",
     resume_path: str = "",
+    user_preferences: dict | None = None,
     cookies_path: str = "",
     keywords: list[str] | None = None,
     location: str = "",
@@ -131,6 +132,7 @@ async def run_pipeline(
             job_description=job.description_text,
             embedder=embedder,
             llm_evaluator=evaluator,
+            user_preferences=user_preferences,
         )
 
         score_row = Score(

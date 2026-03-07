@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Resume Review — AI Job Hunter{% endblock %}
+{% block content %}
+<h2>📝 Resume Review</h2>
+<p style="color: var(--pico-muted-color);">AI-powered analysis of your resume against target job requirements.</p>
+
+<div class="cards-grid" style="margin-bottom: 1.5rem;">
+  <div class="card" data-tip="Skills listed in your user profile">
+    <p class="stat-number">{{ user_skills | length }}</p>
+    <p class="stat-label">Your Skills</p>
+  </div>
+  <div class="card" data-tip="Skills frequently required by target jobs but missing from your profile">
+    <p class="stat-number">{{ missing_skills | length }}</p>
+    <p class="stat-label">Skill Gaps Found</p>
+  </div>
+</div>
+
+{% if missing_skills %}
+<details open>
+  <summary><strong>Top Missing Skills</strong></summary>
+  <table>
+    <thead><tr><th>Skill</th><th>Mentioned In</th></tr></thead>
+    <tbody>
+      {% for skill, count in missing_skills %}
+      <tr><td>{{ skill }}</td><td>{{ count }} job{{ 's' if count > 1 else '' }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+
+{% if user_skills %}
+<details>
+  <summary><strong>Your Current Skills</strong></summary>
+  <p>{{ user_skills | join(', ') }}</p>
+</details>
+{% endif %}
+
+<hr>
+
+<div style="margin-top: 1.5rem;">
+  <h3>🤖 AI-Powered Review</h3>
+  <p style="color: var(--pico-muted-color); font-size: 0.85rem;">
+    Generate a comprehensive review comparing your resume with target job requirements.
+  </p>
+  <button onclick="runReview()" id="review-btn" style="font-size: 1rem; padding: 10px 20px;"
+          data-tip="Send your profile and job data to AI for comprehensive review">
+    🤖 Generate AI Review
+  </button>
+  <p style="color: var(--pico-muted-color); font-size: 0.85rem;">This may take 10-20 seconds.</p>
+</div>
+
+<div id="review-result" style="display: none; margin-top: 1.5rem;">
+  <h3>Review Results</h3>
+  <div class="card" id="review-content"></div>
+</div>
+
+<div id="review-error" style="display: none; margin-top: 1rem;">
+  <div class="card" style="border-color: var(--pico-del-color);">
+    <p style="color: var(--pico-del-color); font-weight: 600;" id="review-error-msg"></p>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function runReview() {
+  var btn = document.getElementById('review-btn');
+  var resultDiv = document.getElementById('review-result');
+  var errorDiv = document.getElementById('review-error');
+  var contentDiv = document.getElementById('review-content');
+
+  btn.disabled = true;
+  btn.setAttribute('aria-busy', 'true');
+  btn.textContent = '⏳ Generating…';
+  resultDiv.style.display = 'none';
+  errorDiv.style.display = 'none';
+
+  fetch('/api/resume-review', { method: 'POST' })
+    .then(function(r) {
+      if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'Request failed'); });
+      return r.json();
+    })
+    .then(function(data) {
+      contentDiv.innerHTML = simpleMarkdown(data.review);
+      resultDiv.style.display = 'block';
+      showToast('Review generated!');
+    })
+    .catch(function(err) {
+      document.getElementById('review-error-msg').textContent = '❌ ' + err.message;
+      errorDiv.style.display = 'block';
+    })
+    .finally(function() {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      btn.textContent = '🤖 Generate AI Review';
+    });
+}
+
+function simpleMarkdown(text) {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^### (.+)$/gm, '<h4>$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^# (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+    .replace(/<\/ul>\s*<ul>/g, '')
+    .replace(/\n{2,}/g, '</p><p>')
+    .replace(/^/, '<p>').replace(/$/, '</p>')
+    .replace(/<p><h/g, '<h').replace(/<\/h(\d)><\/p>/g, '</h$1>')
+    .replace(/<p><ul>/g, '<ul>').replace(/<\/ul><\/p>/g, '</ul>');
+}
+</script>
+{% endblock %}
+

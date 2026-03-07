@@ -16,12 +16,16 @@ EVAL_SYSTEM_PROMPT = """\
 You are a job-fit evaluator. You will receive a candidate's resume and a job
 description. Analyse how well the candidate matches the job.
 
+The candidate may also provide industry preferences:
+- Preferred industries: industries they want to work in (boost score)
+- Disliked industries: industries they want to avoid (penalise score, add risk flag)
+
 Return ONLY a JSON object with these exact keys:
 
 {
   "fit_score": <int 0-100>,
   "missing_skills": [<list of skills the candidate lacks for this role>],
-  "risk_flags": [<list of potential concerns, e.g. "relocation required", "overqualified", "underqualified">],
+  "risk_flags": [<list of potential concerns, e.g. "relocation required", "overqualified", "underqualified", "disliked industry">],
   "decision": "<apply|skip|review>"
 }
 
@@ -30,6 +34,8 @@ Scoring guidelines:
 - 70-84:  Good match — candidate meets most requirements, minor gaps
 - 50-69:  Partial match — significant skill gaps but transferable experience
 - 0-49:   Poor match — major misalignment
+- If the job is in a DISLIKED industry, reduce the score by 15-25 points and add "disliked industry" to risk_flags
+- If the job is in a PREFERRED industry, add 5-10 bonus points (capped at 100)
 
 Decision guidelines:
 - "apply": fit_score >= 70 and no critical risk flags
@@ -47,7 +53,7 @@ Return ONLY valid JSON. No markdown, no commentary.
 class LLMEvaluator:
     """Base interface for LLM evaluation providers."""
 
-    def evaluate(self, resume: str, job_description: str) -> dict[str, Any]:
+    def evaluate(self, resume: str, job_description: str, user_preferences: dict[str, Any] | None = None) -> dict[str, Any]:
         """Return structured evaluation.
 
         Expected schema::
@@ -69,7 +75,7 @@ class OpenAILLMEvaluator(LLMEvaluator):
         self.api_key = api_key
         self.model = model
 
-    def evaluate(self, resume: str, job_description: str) -> dict[str, Any]:
+    def evaluate(self, resume: str, job_description: str, user_preferences: dict[str, Any] | None = None) -> dict[str, Any]:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key)
@@ -78,6 +84,16 @@ class OpenAILLMEvaluator(LLMEvaluator):
             f"=== RESUME ===\n{resume[:4000]}\n\n"
             f"=== JOB DESCRIPTION ===\n{job_description[:4000]}"
         )
+
+        if user_preferences:
+            pref = user_preferences
+            pref_lines = []
+            if pref.get("preferred_industries"):
+                pref_lines.append(f"Preferred industries: {', '.join(pref['preferred_industries'])}")
+            if pref.get("disliked_industries"):
+                pref_lines.append(f"Disliked industries (penalise): {', '.join(pref['disliked_industries'])}")
+            if pref_lines:
+                user_message += f"\n\n=== CANDIDATE PREFERENCES ===\n" + "\n".join(pref_lines)
 
         logger.info("Requesting LLM job evaluation via %s", self.model)
         response = client.chat.completions.create(
@@ -128,7 +144,7 @@ class FakeLLMEvaluator(LLMEvaluator):
         self._risk_flags = risk_flags or []
         self._decision = decision
 
-    def evaluate(self, resume: str, job_description: str) -> dict[str, Any]:
+    def evaluate(self, resume: str, job_description: str, user_preferences: dict[str, Any] | None = None) -> dict[str, Any]:
         return {
             "fit_score": self._fit_score,
             "missing_skills": self._missing_skills,

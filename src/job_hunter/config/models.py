@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,7 +19,12 @@ class LogLevel(str, enum.Enum):
 class AppSettings(BaseSettings):
     """Global application settings, populated from env vars and CLI overrides."""
 
-    model_config = SettingsConfigDict(env_prefix="JOBHUNTER_")
+    model_config = SettingsConfigDict(
+        env_prefix="JOBHUNTER_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     llm_provider: str = "openai"
     openai_api_key: str = ""
@@ -67,7 +72,43 @@ class UserProfile(BaseModel):
     desired_roles: list[str] = Field(default_factory=list)
     seniority_level: str = ""
     education: list[str] = Field(default_factory=list)
-    languages: list[str] = Field(default_factory=list)
+    spoken_languages: list[str] = Field(default_factory=list)
+    programming_languages: list[str] = Field(default_factory=list)
+
+    # Industry / area preferences for filtering discovered jobs
+    preferred_industries: list[str] = Field(default_factory=list)
+    disliked_industries: list[str] = Field(default_factory=list)
+
+    # Backward compatibility: accept old 'languages' key
+    languages: list[str] = Field(default_factory=list, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_languages(cls, values: dict) -> dict:
+        """Migrate old 'languages' field to spoken/programming split."""
+        if isinstance(values, dict):
+            old_langs = values.get("languages", [])
+            if old_langs and not values.get("spoken_languages"):
+                # Known programming languages to separate
+                prog_langs = {
+                    "python", "java", "javascript", "typescript", "c", "c++", "c#",
+                    "go", "golang", "rust", "ruby", "php", "swift", "kotlin", "scala",
+                    "r", "matlab", "sql", "html", "css", "perl", "bash", "shell",
+                    "powershell", "lua", "dart", "haskell", "julia", "fortran",
+                    "assembly", "vba", "objective-c", "groovy", "elixir", "erlang",
+                    "clojure", "lisp", "prolog", "cobol", "vhdl", "verilog",
+                }
+                spoken = []
+                programming = []
+                for lang in old_langs:
+                    if lang.lower().strip() in prog_langs:
+                        programming.append(lang)
+                    else:
+                        spoken.append(lang)
+                values["spoken_languages"] = spoken
+                if not values.get("programming_languages"):
+                    values["programming_languages"] = programming
+        return values
 
     def get_first_name(self) -> str:
         """Return first name, deriving from full name if needed."""

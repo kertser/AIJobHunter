@@ -47,21 +47,30 @@ def _load_run_params(settings) -> dict:
                 blacklist_titles=p.blacklist_titles,
             )
 
-    # Load resume text
+    # Load resume text and user preferences
     user_profile_path = settings.data_dir / "user_profile.yml"
     if user_profile_path.exists():
-        up = load_user_profile(user_profile_path)
-        params["resume_text"] = (
-            f"{up.name}\n{up.title}\n{up.summary}\n"
-            f"Skills: {', '.join(up.skills)}\n"
-            f"Experience: {up.experience_years} years\n"
-        )
+        try:
+            up = load_user_profile(user_profile_path)
+            params["resume_text"] = (
+                f"{up.name}\n{up.title}\n{up.summary}\n"
+                f"Skills: {', '.join(up.skills)}\n"
+                f"Experience: {up.experience_years} years\n"
+            )
+            params["user_preferences"] = {
+                "preferred_industries": up.preferred_industries,
+                "disliked_industries": up.disliked_industries,
+            }
+        except Exception:
+            pass
 
     resume_path = settings.data_dir / "resume.pdf"
     params["resume_path"] = str(resume_path) if resume_path.exists() else "tests/fixtures/resume.txt"
 
     params.setdefault("profile_name", "default")
     params.setdefault("resume_text", "")
+    params.setdefault("user_preferences", None)
+
     return params
 
 
@@ -142,6 +151,8 @@ async def run_score(request: Request):
     async def _run():
         session = make_session(engine)
 
+        user_prefs = params.get("user_preferences")
+
         if params["mock"]:
             embedder = FakeEmbedder(fixed_similarity=0.5)
             evaluator = FakeLLMEvaluator(fit_score=80, decision="apply")
@@ -178,6 +189,7 @@ async def run_score(request: Request):
                 resume_text=params.get("resume_text", ""),
                 job_description=job.description_text or "",
                 embedder=embedder, llm_evaluator=evaluator,
+                user_preferences=user_prefs,
             )
             score_row = Score(
                 job_hash=job.hash, embedding_similarity=result["embedding_similarity"],

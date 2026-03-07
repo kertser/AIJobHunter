@@ -44,10 +44,16 @@ job passes your thresholds — applies via Easy Apply automatically.
 | **HTML parsing** — BeautifulSoup job card & detail extraction | ✅ Ready |
 | **Mock mode** — full discovery pipeline testable with HTML fixtures | ✅ Ready |
 | **Scoring** — embedding similarity + LLM fit evaluation + decision logic | ✅ Ready |
+| **Industry preferences** — preferred/disliked industries affect scoring | ✅ Ready |
 | **Easy Apply** — multi-step wizard automation via Playwright | ✅ Ready |
+| **LLM form filling** — answers arbitrary application questions using AI + profile | ✅ Ready |
 | **Challenge detection** — pauses on captcha, marks job BLOCKED | ✅ Ready |
 | **Daily reports** — Markdown + JSON summaries | ✅ Ready |
 | **Web GUI** — FastAPI + HTMX dashboard with full command & control | ✅ Ready |
+| **Resume Review** — AI-powered resume gap analysis against target jobs | ✅ Ready |
+| **`.env` file support** — API keys and settings from `.env` file | ✅ Ready |
+
+_The project is still under development, but the core pipeline is functional_
 
 ---
 
@@ -61,11 +67,13 @@ cd AIJobHunter
 # 2. Install (requires Python 3.13+ and uv)
 uv sync
 
-# 3. Set your OpenAI API key
-#    Windows PowerShell:
-$env:JOBHUNTER_OPENAI_API_KEY = "sk-..."
-#    Linux/macOS:
-export JOBHUNTER_OPENAI_API_KEY="sk-..."
+# 3. Set your OpenAI API key (recommended: use .env file)
+cp .env.example .env
+#    Edit .env and set: JOBHUNTER_OPENAI_API_KEY=sk-...
+#
+#    Alternatively, set in your shell:
+#    Windows PowerShell: $env:JOBHUNTER_OPENAI_API_KEY = "sk-..."
+#    Linux/macOS:        export JOBHUNTER_OPENAI_API_KEY="sk-..."
 
 # 4. Initialise the database
 uv run hunt init
@@ -134,7 +142,18 @@ uv run pytest -q
 | `JOBHUNTER_LLM_PROVIDER` | No | `"openai"` | LLM provider (`openai`) |
 | `JOBHUNTER_DATA_DIR` | No | `"data"` | Path to the data directory |
 
-Set them in your shell, a `.env` file, or pass `--data-dir` via CLI.
+#### `.env` file support
+
+The recommended way to configure secrets is via a `.env` file in the project root:
+
+```bash
+cp .env.example .env
+# Edit .env:
+JOBHUNTER_OPENAI_API_KEY=sk-proj-...
+```
+
+The app automatically reads `.env` on startup. Environment variables set in
+your shell take precedence over `.env` values.
 
 ### Profile Generation from PDFs
 
@@ -172,6 +191,11 @@ If files already exist you'll be prompted before overwriting.
 ```yaml
 user_profile:
   name: Jane Doe
+  first_name: Jane
+  last_name: Doe
+  email: jane@example.com
+  phone: "555-0123"
+  phone_country_code: "+1"
   title: Senior Python Developer
   summary: Experienced backend engineer with 8 years in Python ecosystems.
   skills:
@@ -191,10 +215,20 @@ user_profile:
   seniority_level: Senior
   education:
     - M.Sc. Computer Science
-  languages:
+  spoken_languages:          # Human languages only
+    - English
+    - Spanish
+  programming_languages:     # Programming languages only
     - Python
     - SQL
-    - English
+    - Go
+  preferred_industries:      # Boost score for matching jobs
+    - startups
+    - healthcare
+    - AI/ML
+  disliked_industries:       # Penalise score for matching jobs
+    - fintech
+    - adtech
 ```
 
 #### Generated `profiles.yml` (example)
@@ -469,7 +503,8 @@ Opens a browser-based dashboard at `http://localhost:8000` with:
 | **Dashboard** | `/` | Summary cards, applied today, top missing skills, quick actions |
 | **Jobs** | `/jobs` | Sortable/filterable job table with status, fit, dates, and inline actions |
 | **Job Detail** | `/api/jobs/{hash}` | Full description (Markdown), scores, Easy Apply button, application history |
-| **Profiles** | `/profiles` | View/edit user profile and search profiles via structured forms |
+| **Profiles** | `/profiles` | View/edit user profile, industry preferences, and search profiles |
+| **Resume Review** | `/resume-review` | AI-powered resume gap analysis with skill gaps and improvement suggestions |
 | **Run Controls** | `/run` | Trigger Discover / Score / Apply / Full Pipeline with live SSE progress |
 | **Reports** | `/reports` | Browse and view daily reports |
 | **Settings** | `/settings` | Toggle mock/dry-run/headless, adjust slow-mo, update API key |
@@ -695,6 +730,8 @@ All tests run offline with no API keys or network access required.
 | **Phase 5** | Real LinkedIn integration + `hunt login` | ✅ Complete |
 | **Phase 6** | Orchestration + reporting + `hunt run` + `hunt report` | ✅ Complete |
 | **Phase 7** | Web GUI dashboard (FastAPI + HTMX) + `hunt serve` | ✅ Complete |
+| **Phase 8** | LLM-based form filling, `.env` support, industry preferences | ✅ Complete |
+| **Phase 9** | Resume Review tool, language split, sort persistence, UI polish (icons, tooltips, active nav) | ✅ Complete |
 
 ---
 

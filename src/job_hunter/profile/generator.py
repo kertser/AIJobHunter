@@ -44,7 +44,10 @@ Your task is to produce a JSON object with **exactly** two keys:
    - desired_roles (list[string]) — job titles this person should target
    - seniority_level (string) — e.g. "Junior", "Mid", "Senior", "Lead", "Principal"
    - education (list[string]) — degrees, certifications
-   - languages (list[string]) — programming and spoken languages
+   - spoken_languages (list[string]) — human/spoken languages ONLY (e.g. "English", "Hebrew", "Russian"). Do NOT include programming languages here.
+   - programming_languages (list[string]) — programming/scripting languages ONLY (e.g. "Python", "SQL", "MATLAB")
+   - preferred_industries (list[string]) — industries/domains the person seems drawn to based on their experience (e.g. "defense", "healthcare", "startups", "AI/ML")
+   - disliked_industries (list[string]) — leave empty unless explicitly stated
 
 2. "search_profiles" — a list of 1–3 search-profile objects, each tailored to
    a distinct career track the person could pursue.  Each object has:
@@ -121,7 +124,10 @@ class FakeProfileGenerator(ProfileGenerator):
                 desired_roles=["Senior Python Developer", "Backend Engineer", "Staff Engineer"],
                 seniority_level="Senior",
                 education=["M.Sc. Computer Science"],
-                languages=["Python", "SQL", "English"],
+                spoken_languages=["English"],
+                programming_languages=["Python", "SQL"],
+                preferred_industries=[],
+                disliked_industries=[],
             ),
             search_profiles=[
                 SearchProfile(

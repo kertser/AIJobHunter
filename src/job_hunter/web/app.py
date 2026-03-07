@@ -92,7 +92,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # Import and include routers
-    from job_hunter.web.routers import dashboard, jobs, onboarding, profiles, reports, run, settings as settings_router
+    from job_hunter.web.routers import dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings as settings_router
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon():
@@ -107,6 +107,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.include_router(profiles.router)
     app.include_router(run.router)
     app.include_router(reports.router)
+    app.include_router(resume_review.router)
     app.include_router(settings_router.router)
 
     return app

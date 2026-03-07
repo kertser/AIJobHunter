@@ -34,7 +34,21 @@ user_profile:
   education:
   - M.Sc. in Physics (Condensed Matter Physics) - Tel Aviv University
   - B.Sc. in Physics and Computer Science - Ben-Gurion University of Negev
-  languages:
+  spoken_languages:
   - Russian
   - English
   - Hebrew
+  programming_languages:
+  - Python
+  - MATLAB
+  - SQL
+  preferred_industries:
+  - startups
+  - defense
+  - military
+  - healthcare
+  - medical
+  - AI/ML
+  disliked_industries:
+  - fintech
+  - adtech
