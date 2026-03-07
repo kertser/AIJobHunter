@@ -1,4 +1,3 @@
 TODO:
 - Add automated daily discover+score+apply cycle with GUI controls for scheduling and pausing
 - Email/Slack notifications - Notify when new high-fit jobs are found.
-- Save last jobs sort preference used.

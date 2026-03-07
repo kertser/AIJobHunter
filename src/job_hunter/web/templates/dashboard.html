@@ -1,61 +1,257 @@
 {% extends "base.html" %}
 {% block title %}Dashboard — AI Job Hunter{% endblock %}
-{% block content %}
-<h2>Dashboard</h2>
+{% block extra_head %}
+<style>
+  /* ── Stat cards with colored left accent ── */
+  .stat-card {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 10px; padding: 1rem 1.2rem;
+    border-left: 4px solid #94a3b8;
+    transition: box-shadow 0.15s, transform 0.15s;
+  }
+  .stat-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); transform: translateY(-1px); }
+  .stat-card .num { font-size: 1.8rem; font-weight: 800; margin: 0; line-height: 1.1; }
+  .stat-card .lbl { color: var(--pico-muted-color); font-size: 0.78rem; margin: 2px 0 0; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-card.accent-blue   { border-left-color: #3b82f6; }
+  .stat-card.accent-indigo { border-left-color: #6366f1; }
+  .stat-card.accent-amber  { border-left-color: #f59e0b; }
+  .stat-card.accent-green  { border-left-color: #10b981; }
+  .stat-card.accent-rose   { border-left-color: #f43f5e; }
+  .stat-card.accent-slate  { border-left-color: #64748b; }
+  .stat-card.accent-cyan   { border-left-color: #06b6d4; }
+  .stat-card.accent-purple { border-left-color: #a855f7; }
 
-<div class="cards-grid">
-  <div class="card">
-    <p class="stat-number">{{ total_jobs }}</p>
-    <p class="stat-label">Total Jobs</p>
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+    gap: 0.7rem;
+  }
+
+  /* ── Section panels ── */
+  .panel {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 10px; padding: 1.2rem;
+    background: var(--pico-card-background-color);
+  }
+  .panel h3 { margin: 0 0 0.8rem; font-size: 1rem; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.2rem; }
+  @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* ── Status donut (pure CSS conic-gradient) ── */
+  .donut-wrap { display: flex; align-items: center; gap: 1.2rem; }
+  .donut {
+    width: 130px; height: 130px; border-radius: 50%;
+    position: relative; flex-shrink: 0;
+  }
+  .donut::after {
+    content: ''; position: absolute;
+    top: 28%; left: 28%; width: 44%; height: 44%;
+    background: var(--pico-card-background-color, #fff);
+    border-radius: 50%;
+  }
+  .donut-center {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1; text-align: center;
+    font-size: 1.3rem; font-weight: 800; line-height: 1;
+  }
+  .donut-center small { display: block; font-size: 0.6rem; font-weight: 400; color: var(--pico-muted-color); text-transform: uppercase; }
+  .legend { font-size: 0.78rem; line-height: 1.8; }
+  .legend-dot {
+    display: inline-block; width: 10px; height: 10px;
+    border-radius: 3px; margin-right: 5px; vertical-align: middle;
+  }
+
+  /* ── Bar chart ── */
+  .bar-chart { display: flex; flex-direction: column; gap: 0.4rem; }
+  .bar-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }
+  .bar-label { width: 50px; text-align: right; flex-shrink: 0; color: var(--pico-muted-color); font-weight: 500; }
+  .bar-track { flex: 1; height: 22px; background: #f1f5f9; border-radius: 6px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 6px; transition: width 0.5s ease; min-width: 2px; display: flex; align-items: center; padding-left: 6px; font-size: 0.7rem; font-weight: 600; color: white; }
+  .bar-val { width: 28px; text-align: left; flex-shrink: 0; font-weight: 600; font-size: 0.8rem; }
+
+  /* ── Horizontal skill bars ── */
+  .skill-bar-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; font-size: 0.8rem; }
+  .skill-name { width: 120px; text-align: right; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .skill-track { flex: 1; height: 16px; background: #f1f5f9; border-radius: 4px; overflow: hidden; }
+  .skill-fill { height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); border-radius: 4px; transition: width 0.5s ease; }
+  .skill-count { width: 20px; font-weight: 600; font-size: 0.75rem; }
+
+  /* ── Recent timeline ── */
+  .timeline { list-style: none; padding: 0; margin: 0; }
+  .timeline li {
+    display: flex; align-items: flex-start; gap: 0.6rem;
+    padding: 0.45rem 0; border-bottom: 1px solid #f1f5f9;
+    font-size: 0.82rem;
+  }
+  .timeline li:last-child { border-bottom: none; }
+  .timeline .time { color: var(--pico-muted-color); font-size: 0.72rem; white-space: nowrap; min-width: 80px; padding-top: 2px; }
+  .timeline .info { flex: 1; }
+  .timeline .info strong { font-weight: 600; }
+  .timeline .info small { color: var(--pico-muted-color); }
+
+  /* ── Quick actions ── */
+  .quick-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1.2rem; }
+  .quick-actions a { font-size: 0.85rem; padding: 8px 16px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h2 style="margin-bottom: 0.3rem;">📊 Dashboard</h2>
+<p style="color: var(--pico-muted-color); margin-bottom: 1.2rem; font-size: 0.88rem;">
+  Your job hunting overview at a glance.
+</p>
+
+<!-- ═══ Stat cards ═══ -->
+<div class="stats-grid">
+  <div class="stat-card accent-blue" data-tip="Total discovered jobs in database">
+    <p class="num">{{ total_jobs }}</p>
+    <p class="lbl">Total Jobs</p>
   </div>
-  <div class="card">
-    <p class="stat-number">{{ status_counts.get('new', 0) }}</p>
-    <p class="stat-label">New</p>
+  <div class="stat-card accent-indigo" data-tip="Freshly discovered, not yet scored">
+    <p class="num">{{ status_counts.get('new', 0) }}</p>
+    <p class="lbl">New</p>
   </div>
-  <div class="card">
-    <p class="stat-number">{{ status_counts.get('queued', 0) }}</p>
-    <p class="stat-label">Queued</p>
+  <div class="stat-card accent-purple" data-tip="Scored and awaiting your decision">
+    <p class="num">{{ status_counts.get('scored', 0) }}</p>
+    <p class="lbl">Scored</p>
   </div>
-  <div class="card">
-    <p class="stat-number">{{ status_counts.get('applied', 0) }}</p>
-    <p class="stat-label">Applied</p>
+  <div class="stat-card accent-amber" data-tip="Ready for Easy Apply submission">
+    <p class="num">{{ status_counts.get('queued', 0) }}</p>
+    <p class="lbl">Queued</p>
   </div>
-  <div class="card">
-    <p class="stat-number">{{ status_counts.get('review', 0) }}</p>
-    <p class="stat-label">Review</p>
+  <div class="stat-card accent-green" data-tip="Successfully applied">
+    <p class="num">{{ status_counts.get('applied', 0) }}</p>
+    <p class="lbl">Applied</p>
   </div>
-  <div class="card">
-    <p class="stat-number">{{ status_counts.get('skipped', 0) }}</p>
-    <p class="stat-label">Skipped</p>
+  <div class="stat-card accent-cyan" data-tip="Applications sent today">
+    <p class="num">{{ applied_today }}</p>
+    <p class="lbl">Today</p>
   </div>
-  <div class="card">
-    <p class="stat-number">{{ status_counts.get('blocked', 0) }}</p>
-    <p class="stat-label">Blocked</p>
+  <div class="stat-card accent-slate" data-tip="Average LLM fit score across all scored jobs">
+    <p class="num">{{ avg_fit }}<small style="font-size:0.5em; font-weight:400;">/100</small></p>
+    <p class="lbl">Avg Fit</p>
   </div>
-  <div class="card">
-    <p class="stat-number">{{ applied_today }}</p>
-    <p class="stat-label">Applied Today</p>
+  <div class="stat-card accent-rose" data-tip="Jobs with Easy Apply available">
+    <p class="num">{{ easy_apply_count }}</p>
+    <p class="lbl">Easy Apply</p>
   </div>
 </div>
 
-{% if top_missing_skills %}
-<h3 style="margin-top: 2rem;">Top Missing Skills</h3>
-<table>
-  <thead><tr><th>Skill</th><th>Count</th></tr></thead>
-  <tbody>
-    {% for item in top_missing_skills %}
-    <tr><td>{{ item.skill }}</td><td>{{ item.count }}</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% endif %}
+<!-- ═══ Charts row ═══ -->
+<div class="two-col">
 
-<div style="margin-top: 2rem;">
-  <h3>Quick Actions</h3>
-  <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-    <a href="/run" role="button">Run Pipeline</a>
-    <a href="/jobs" role="button" class="outline">View Jobs</a>
-    <a href="/reports" role="button" class="secondary">Reports</a>
+  <!-- Status distribution donut -->
+  <div class="panel">
+    <h3>📈 Status Distribution</h3>
+    {% set colors = {'new':'#3b82f6','scored':'#6366f1','queued':'#f59e0b','applied':'#10b981','review':'#eab308','skipped':'#94a3b8','blocked':'#ef4444','failed':'#dc2626'} %}
+    {% set statuses_ordered = ['new','scored','queued','applied','review','skipped','blocked','failed'] %}
+    {% if total_jobs > 0 %}
+    <div class="donut-wrap">
+      {% set ns = namespace(offset=0) %}
+      <div class="donut" style="background: conic-gradient(
+        {% for s in statuses_ordered %}{% if status_counts.get(s, 0) > 0 %}{{ colors[s] }} {{ ns.offset }}deg {{ ns.offset + (status_counts.get(s, 0) / total_jobs * 360) }}deg{% if not loop.last %}, {% endif %}{% set ns.offset = ns.offset + (status_counts.get(s, 0) / total_jobs * 360) %}{% endif %}{% endfor %}
+        {% if ns.offset < 360 %}, #e2e8f0 {{ ns.offset }}deg 360deg{% endif %}
+      );">
+        <div class="donut-center">{{ total_jobs }}<small>jobs</small></div>
+      </div>
+      <div class="legend">
+        {% for s in statuses_ordered %}
+        {% if status_counts.get(s, 0) > 0 %}
+        <div><span class="legend-dot" style="background:{{ colors[s] }};"></span>{{ s | capitalize }} · {{ status_counts.get(s, 0) }}</div>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <p style="color: var(--pico-muted-color); text-align: center; padding: 2rem 0;">No jobs yet. Run Discover to get started!</p>
+    {% endif %}
   </div>
+
+  <!-- Fit score histogram -->
+  <div class="panel">
+    <h3>🎯 Fit Score Distribution</h3>
+    {% if scored_count > 0 %}
+    {% set max_bucket = fit_buckets | max %}
+    {% set bucket_colors = ['#ef4444','#f97316','#eab308','#22c55e','#10b981'] %}
+    <div class="bar-chart">
+      {% for i in range(5) %}
+      <div class="bar-row">
+        <span class="bar-label">{{ fit_bucket_labels[i] }}</span>
+        <div class="bar-track">
+          <div class="bar-fill" style="width: {{ (fit_buckets[i] / max_bucket * 100) if max_bucket > 0 else 0 }}%; background: {{ bucket_colors[i] }};">
+            {% if fit_buckets[i] > 0 and (fit_buckets[i] / max_bucket * 100) > 15 %}{{ fit_buckets[i] }}{% endif %}
+          </div>
+        </div>
+        <span class="bar-val">{{ fit_buckets[i] }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p style="text-align:center; margin-top:0.5rem; font-size:0.78rem; color: var(--pico-muted-color);">
+      {{ scored_count }} scored · avg {{ avg_fit }}/100
+      {% if success_attempts > 0 %} · {{ success_attempts }}/{{ total_attempts }} applied successfully{% endif %}
+    </p>
+    {% else %}
+    <p style="color: var(--pico-muted-color); text-align: center; padding: 2rem 0;">No scores yet. Run Score to evaluate jobs!</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ═══ Bottom row ═══ -->
+<div class="two-col">
+
+  <!-- Missing skills -->
+  <div class="panel">
+    <h3>⚠️ Top Missing Skills</h3>
+    {% if top_missing_skills %}
+    {% set max_skill = top_missing_skills[0].count if top_missing_skills else 1 %}
+    <div>
+      {% for item in top_missing_skills %}
+      <div class="skill-bar-row">
+        <span class="skill-name" title="{{ item.skill }}">{{ item.skill }}</span>
+        <div class="skill-track">
+          <div class="skill-fill" style="width: {{ (item.count / max_skill * 100) }}%;"></div>
+        </div>
+        <span class="skill-count">{{ item.count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p style="font-size: 0.75rem; color: var(--pico-muted-color); margin-top: 0.5rem;">
+      Skills frequently required by target jobs but missing from your profile.
+      <a href="/resume-review" style="font-size: 0.75rem;">Get AI review →</a>
+    </p>
+    {% else %}
+    <p style="color: var(--pico-muted-color); text-align: center; padding: 1.5rem 0;">Score some jobs to see skill gap analysis.</p>
+    {% endif %}
+  </div>
+
+  <!-- Recent activity -->
+  <div class="panel">
+    <h3>🕐 Recent Activity</h3>
+    {% if recent_jobs %}
+    <ul class="timeline">
+      {% for rj in recent_jobs %}
+      <li>
+        <span class="time">{{ rj.collected_at }}</span>
+        <div class="info">
+          <a href="/api/jobs/{{ rj.hash }}"><strong>{{ rj.title }}</strong></a>
+          <small>at {{ rj.company }}</small>
+          <span class="status-badge status-{{ rj.status }}" style="margin-left: 4px;">{{ rj.status }}</span>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p style="color: var(--pico-muted-color); text-align: center; padding: 1.5rem 0;">No jobs discovered yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ═══ Quick actions ═══ -->
+<div class="quick-actions">
+  <a href="/run" role="button" data-tip="Run the full pipeline">▶️ Run Pipeline</a>
+  <a href="/jobs" role="button" class="outline" data-tip="Browse all jobs">💼 View Jobs</a>
+  <a href="/reports" role="button" class="secondary outline" data-tip="View reports">📈 Reports</a>
+  <a href="/resume-review" role="button" class="contrast outline" data-tip="AI resume analysis">📝 Resume Review</a>
 </div>
 {% endblock %}

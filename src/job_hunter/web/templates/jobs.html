@@ -102,7 +102,7 @@
 
 {% block extra_scripts %}
 <script>
-// --- Sort state ---
+// --- Sort state (persisted in localStorage) ---
 var currentSortCol = null;
 var currentSortDir = 'asc';
 
@@ -112,13 +112,19 @@ function sortTable(th) {
   var tbody = document.getElementById('job-table-body');
   var rows = Array.from(tbody.querySelectorAll('tr'));
 
-  // Toggle direction if same column
+  // Toggle direction if same column, otherwise default asc
   if (currentSortCol === col) {
     currentSortDir = currentSortDir === 'asc' ? 'desc' : 'asc';
   } else {
     currentSortCol = col;
     currentSortDir = 'asc';
   }
+
+  // Persist preference
+  try {
+    localStorage.setItem('jobSortCol', String(currentSortCol));
+    localStorage.setItem('jobSortDir', currentSortDir);
+  } catch(e) {}
 
   // Clear sort classes from all headers
   document.querySelectorAll('th.sortable').forEach(function(h) {
@@ -146,6 +152,28 @@ function sortTable(th) {
 
   rows.forEach(function(row) { tbody.appendChild(row); });
 }
+
+// --- Restore saved sort on page load ---
+(function initSort() {
+  var savedCol = null;
+  var savedDir = 'desc';
+  try {
+    var sc = localStorage.getItem('jobSortCol');
+    var sd = localStorage.getItem('jobSortDir');
+    if (sc !== null) { savedCol = parseInt(sc); savedDir = sd || 'desc'; }
+  } catch(e) {}
+
+  // Default: column 8 = Posted, descending (newest first)
+  if (savedCol === null) { savedCol = 8; savedDir = 'desc'; }
+
+  var th = document.querySelector('th.sortable[data-col="' + savedCol + '"]');
+  if (th) {
+    // Pre-set state so sortTable toggles to the desired direction
+    currentSortCol = savedCol;
+    currentSortDir = savedDir === 'asc' ? 'desc' : 'asc';
+    sortTable(th);
+  }
+})();
 
 // --- Selection helpers ---
 function getSelectedHashes() {
