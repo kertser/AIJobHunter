@@ -212,12 +212,20 @@ async def run_apply(request: Request):
 
     # Build form answers from user profile
     profile_form_answers: dict[str, str] = {}
+    user_profile = None
     try:
         from job_hunter.config.loader import load_user_profile
         user_profile_path = settings.data_dir / "user_profile.yml"
         if user_profile_path.exists():
             user_profile = load_user_profile(user_profile_path)
             profile_form_answers = user_profile.build_form_answers()
+    except Exception:
+        pass
+
+    user_profile_dict = None
+    try:
+        if user_profile:
+            user_profile_dict = user_profile.model_dump()
     except Exception:
         pass
 
@@ -243,6 +251,8 @@ async def run_apply(request: Request):
                     slowmo_ms=params["slowmo_ms"], mock=params["mock"],
                     cookies_path=params["cookies_path"],
                     form_answers=profile_form_answers,
+                    openai_api_key=params.get("openai_api_key", ""),
+                    user_profile=user_profile_dict,
                 )
                 result_map = {"success": ApplicationResult.SUCCESS, "dry_run": ApplicationResult.DRY_RUN,
                               "failed": ApplicationResult.FAILED, "blocked": ApplicationResult.BLOCKED,

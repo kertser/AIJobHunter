@@ -233,14 +233,18 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
 
     # Build form answers from user profile
     profile_form_answers: dict[str, str] = {}
+    user_profile_dict: dict | None = None
     try:
         from job_hunter.config.loader import load_user_profile
         user_profile_path = settings.data_dir / "user_profile.yml"
         if user_profile_path.exists():
             user_profile = load_user_profile(user_profile_path)
             profile_form_answers = user_profile.build_form_answers()
+            user_profile_dict = user_profile.model_dump()
     except Exception:
         pass
+
+    api_key = settings.openai_api_key
 
     async def _run():
         from job_hunter.linkedin.mock_site import MockLinkedInServer
@@ -257,6 +261,8 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
                 slowmo_ms=slowmo_ms, mock=mock,
                 cookies_path=cookies_path,
                 form_answers=profile_form_answers,
+                openai_api_key=api_key,
+                user_profile=user_profile_dict,
             )
             sess = make_session(engine)
             result_map = {"success": ApplicationResult.SUCCESS, "dry_run": ApplicationResult.DRY_RUN,

@@ -86,10 +86,17 @@ async def fill_form_fields(page: PageOrFrame, answers: dict[str, str] | None = N
                     return answers[answer_key]
         return default
 
-    # --- Text inputs --- try multiple selector strategies
-    text_inputs = await _find_first_matching(page, sel.WIZARD_TEXT_INPUT_SELECTORS)
-    if text_inputs is not None:
-        count = await text_inputs.count()
+    # --- Text/number/tel/email inputs --- collect ALL fillable inputs
+    seen_input_ids: set[str] = set()
+    for input_selector in sel.WIZARD_TEXT_INPUT_SELECTORS:
+        try:
+            text_inputs = page.locator(input_selector)
+            count = await text_inputs.count()
+            if count == 0:
+                continue
+        except Exception:
+            continue
+
         for i in range(count):
             inp = text_inputs.nth(i)
             try:
@@ -97,6 +104,22 @@ async def fill_form_fields(page: PageOrFrame, answers: dict[str, str] | None = N
                     continue
             except Exception:
                 continue
+
+            # Deduplicate by input id
+            try:
+                input_id = await inp.get_attribute("id") or ""
+                if input_id and input_id in seen_input_ids:
+                    continue
+                if input_id:
+                    seen_input_ids.add(input_id)
+            except Exception:
+                pass
+
+            # Get input type for type-aware handling
+            try:
+                input_type = (await inp.get_attribute("type") or "text").lower()
+            except Exception:
+                input_type = "text"
 
             # Skip if field already has a value
             try:
@@ -119,9 +142,9 @@ async def fill_form_fields(page: PageOrFrame, answers: dict[str, str] | None = N
             # Strategy 2: associated <label> via for/id
             if not label_text:
                 try:
-                    input_id = await inp.get_attribute("id")
-                    if input_id:
-                        label_el = page.locator(f"label[for='{input_id}']")
+                    inp_id = await inp.get_attribute("id")
+                    if inp_id:
+                        label_el = page.locator(f"label[for='{inp_id}']")
                         if await label_el.count() > 0:
                             label_text = (await label_el.first.inner_text()).strip().lower()
                 except Exception:
@@ -151,14 +174,23 @@ async def fill_form_fields(page: PageOrFrame, answers: dict[str, str] | None = N
 
             value = _lookup_answer(label_text)
             if not value:
-                logger.debug("No answer for text field '%s' — skipping", label_text)
-                continue
+                # For number fields with no specific answer, provide a sensible default
+                if input_type == "number":
+                    # Check if it's asking for years of experience
+                    if any(kw in label_text for kw in ["year", "experience", "how many", "how long"]):
+                        value = str(answers.get("years of experience", "10"))
+                    else:
+                        value = "5"  # safe numeric default
+                else:
+                    logger.debug("No answer for %s field '%s' — skipping", input_type, label_text)
+                    continue
+
             try:
                 await inp.fill(value)
                 filled[label_text] = value
-                logger.info("Filled text field '%s' = '%s'", label_text, value)
+                logger.info("Filled %s field '%s' = '%s'", input_type, label_text, value)
             except Exception as exc:
-                logger.debug("Failed to fill text field '%s': %s", label_text, exc)
+                logger.debug("Failed to fill %s field '%s': %s", input_type, label_text, exc)
 
     # --- Select dropdowns --- try multiple selector strategies
     selects = await _find_first_matching(page, sel.WIZARD_SELECT_SELECTORS)

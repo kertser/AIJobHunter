@@ -435,12 +435,14 @@ def apply(
 
     # Build form answers from user profile
     profile_form_answers: dict[str, str] = {}
+    user_profile_dict: dict | None = None
     try:
         from job_hunter.config.loader import load_user_profile
         user_profile_path = settings.data_dir / "user_profile.yml"
         if user_profile_path.exists():
             user_profile = load_user_profile(user_profile_path)
             profile_form_answers = user_profile.build_form_answers()
+            user_profile_dict = user_profile.model_dump()
     except Exception:
         pass
 
@@ -486,6 +488,8 @@ def apply(
                     slowmo_ms=settings.slowmo_ms,
                     mock=settings.mock,
                     form_answers=profile_form_answers,
+                    openai_api_key=settings.openai_api_key,
+                    user_profile=user_profile_dict,
                 )
             )
 

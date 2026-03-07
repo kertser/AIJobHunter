@@ -280,8 +280,14 @@ async def apply_to_job(
     mock: bool = False,
     form_answers: dict[str, str] | None = None,
     cookies_path: str | Path = "data/cookies.json",
+    openai_api_key: str = "",
+    user_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute the Easy Apply wizard for a single job.
+
+    *user_profile* is a dict of profile data (from UserProfile.model_dump()).
+    If *openai_api_key* and *user_profile* are provided, form fields that
+    can't be filled by simple lookup will be answered by an LLM.
 
     Returns::
 
@@ -307,6 +313,18 @@ async def apply_to_job(
     }
 
     from job_hunter.linkedin.session import LinkedInSession
+
+    # Initialize LLM form filler if we have the API key and profile
+    llm_filler = None
+    profile_context = ""
+    if openai_api_key and user_profile:
+        try:
+            from job_hunter.linkedin.form_filler_llm import LLMFormFiller, build_profile_context
+            llm_filler = LLMFormFiller(api_key=openai_api_key)
+            profile_context = build_profile_context(user_profile)
+            logger.info("LLM form filler initialized (profile: %d chars)", len(profile_context))
+        except Exception as exc:
+            logger.warning("Failed to initialize LLM form filler: %s", exc)
 
     async with async_playwright() as pw:
         stealth_args = ["--disable-blink-features=AutomationControlled"]
@@ -505,16 +523,13 @@ async def apply_to_job(
                 except Exception as exc:
                     logger.debug("Diagnostics failed: %s", exc)
 
-                # ---- Stuck detection (compare modal content) ----
+                # ---- Stuck pre-check (compare modal content) ----
+                # We record the HTML now but only declare "stuck" AFTER form filling
                 try:
                     cur_modal_html = await modal_scope.inner_html() if hasattr(modal_scope, 'inner_html') else await wizard_ctx.content()
                 except Exception:
                     cur_modal_html = ""
-                if cur_modal_html and cur_modal_html == prev_modal_html and step > 1:
-                    logger.warning("Wizard modal content unchanged at step %d — stuck!", step)
-                    result["failure_stage"] = f"stuck_step{step}"
-                    result["form_answers"] = all_filled
-                    return result
+                page_unchanged = cur_modal_html and cur_modal_html == prev_modal_html and step > 1
                 prev_modal_html = cur_modal_html
 
                 # Check for challenge
@@ -580,13 +595,23 @@ async def apply_to_job(
                                     return '';
                                 }
 
-                                // Fill text inputs
-                                const inputs = outlet.querySelectorAll('input[type="text"]:not([readonly]), input:not([type]):not([readonly])');
+                                // Fill text, number, tel, email inputs
+                                const inputs = outlet.querySelectorAll('input[type="text"]:not([readonly]), input[type="number"]:not([readonly]), input[type="tel"]:not([readonly]), input[type="email"]:not([readonly]), input:not([type]):not([readonly])');
                                 inputs.forEach(inp => {
                                     if (inp.offsetParent === null) return;
+                                    if (inp.type === 'hidden' || inp.type === 'radio' || inp.type === 'checkbox' || inp.type === 'file') return;
                                     if (inp.value && inp.value.trim()) return;
                                     const label = inp.getAttribute('aria-label') || inp.name || inp.id || '';
-                                    const val = lookupAnswer(label);
+                                    let val = lookupAnswer(label);
+                                    // For number fields with no answer, provide defaults
+                                    if (!val && inp.type === 'number') {
+                                        const norm = label.toLowerCase();
+                                        if (norm.includes('year') || norm.includes('experience') || norm.includes('how many') || norm.includes('how long')) {
+                                            val = answers['years of experience'] || '10';
+                                        } else {
+                                            val = '5';
+                                        }
+                                    }
                                     if (val) {
                                         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                                         nativeSetter.call(inp, val);
@@ -696,6 +721,241 @@ async def apply_to_job(
                         logger.debug("Playwright radio click failed: %s", exc)
 
                 all_filled.update(filled)
+
+                # ---- LLM-based form filling for remaining unfilled fields ----
+                if llm_filler and modal_locator:
+                    try:
+                        # Extract unfilled fields from the modal
+                        unfilled = await modal_locator.evaluate("""
+                            (outlet) => {
+                                const fields = [];
+
+                                function getLabel(el) {
+                                    var lbl = el.getAttribute('aria-label');
+                                    if (lbl) return lbl.trim();
+                                    if (el.id) {
+                                        var labelEl = outlet.querySelector('label[for="' + el.id + '"]');
+                                        if (labelEl && labelEl.textContent) return labelEl.textContent.trim();
+                                    }
+                                    return el.name || '';
+                                }
+
+                                var inputs = outlet.querySelectorAll(
+                                    'input[type="text"], input[type="number"], input[type="tel"], input[type="email"]');
+                                for (var i = 0; i < inputs.length; i++) {
+                                    var inp = inputs[i];
+                                    if (inp.offsetParent === null) continue;
+                                    if (inp.value && inp.value.trim()) continue;
+                                    var label = getLabel(inp);
+                                    if (label) fields.push({label: label, type: inp.type || 'text', id: inp.id || '', required: inp.required});
+                                }
+
+                                var selects = outlet.querySelectorAll('select');
+                                for (var j = 0; j < selects.length; j++) {
+                                    var sel = selects[j];
+                                    if (sel.offsetParent === null) continue;
+                                    if (sel.selectedIndex > 0) continue;
+                                    var slabel = getLabel(sel);
+                                    var options = [];
+                                    for (var k = 0; k < sel.options.length; k++) {
+                                        var o = sel.options[k];
+                                        if (o.value && o.text.trim() && o.text.toLowerCase().indexOf('select') === -1) {
+                                            options.push(o.text.trim());
+                                        }
+                                    }
+                                    if (slabel) fields.push({label: slabel, type: 'select', id: sel.id || '', options: options, required: sel.required});
+                                }
+
+                                var radios = outlet.querySelectorAll('input[type="radio"]');
+                                var groups = {};
+                                for (var ri = 0; ri < radios.length; ri++) {
+                                    var r = radios[ri];
+                                    if (!r.name) continue;
+                                    if (!groups[r.name]) groups[r.name] = {checked: false, options: []};
+                                    if (r.checked) groups[r.name].checked = true;
+                                    var optLabel = r.getAttribute('data-test-text-selectable-option__input') || '';
+                                    if (!optLabel && r.id) {
+                                        var rl = outlet.querySelector('label[for="' + r.id + '"]');
+                                        if (rl && rl.textContent) optLabel = rl.textContent.trim();
+                                    }
+                                    if (optLabel) groups[r.name].options.push(optLabel.trim());
+                                }
+                                var gnames = Object.keys(groups);
+                                for (var gi = 0; gi < gnames.length; gi++) {
+                                    var gname = gnames[gi];
+                                    var g = groups[gname];
+                                    if (g.checked) continue;
+                                    var firstR = outlet.querySelector('input[type="radio"][name="' + gname + '"]');
+                                    var fieldset = firstR ? firstR.closest('fieldset') : null;
+                                    var legend = gname;
+                                    if (fieldset) {
+                                        var legEl = fieldset.querySelector('legend, span.fb-form-element-label');
+                                        if (legEl && legEl.textContent) legend = legEl.textContent.trim();
+                                    }
+                                    fields.push({label: legend, type: 'radio', name: gname, options: g.options});
+                                }
+
+                                var textareas = outlet.querySelectorAll('textarea');
+                                for (var ti = 0; ti < textareas.length; ti++) {
+                                    var ta = textareas[ti];
+                                    if (ta.offsetParent === null) continue;
+                                    if (ta.value && ta.value.trim()) continue;
+                                    var tlabel = getLabel(ta);
+                                    if (tlabel) fields.push({label: tlabel, type: 'textarea', id: ta.id || '', required: ta.required});
+                                }
+
+                                return fields;
+                            }
+                        """)
+
+                        if unfilled:
+                            logger.info("LLM form filler: %d unfilled fields detected", len(unfilled))
+                            llm_answers = llm_filler.answer_fields(
+                                fields=unfilled,
+                                profile_context=profile_context,
+                                job_context=f"Job URL: {job_url}",
+                            )
+                            if llm_answers:
+                                logger.info("LLM answered %d fields: %s", len(llm_answers),
+                                            {k[:50]: v[:50] for k, v in llm_answers.items()})
+
+                                # Fill the LLM answers back into the form
+                                llm_fill_result = await modal_locator.evaluate("""
+                                    (outlet, answers) => {
+                                        var filled = {};
+
+                                        function getLabel(el) {
+                                            var lbl = el.getAttribute('aria-label');
+                                            if (lbl) return lbl.trim();
+                                            if (el.id) {
+                                                var labelEl = outlet.querySelector('label[for="' + el.id + '"]');
+                                                if (labelEl && labelEl.textContent) return labelEl.textContent.trim();
+                                            }
+                                            return el.name || '';
+                                        }
+
+                                        var inputs = outlet.querySelectorAll(
+                                            'input[type="text"], input[type="number"], input[type="tel"], input[type="email"]');
+                                        for (var i = 0; i < inputs.length; i++) {
+                                            var inp = inputs[i];
+                                            if (inp.offsetParent === null) continue;
+                                            if (inp.value && inp.value.trim()) continue;
+                                            var label = getLabel(inp);
+                                            var val = answers[label];
+                                            if (val) {
+                                                var setter = Object.getOwnPropertyDescriptor(
+                                                    window.HTMLInputElement.prototype, 'value').set;
+                                                setter.call(inp, val);
+                                                inp.dispatchEvent(new Event('input', {bubbles: true}));
+                                                inp.dispatchEvent(new Event('change', {bubbles: true}));
+                                                filled[label] = val;
+                                            }
+                                        }
+
+                                        var selects = outlet.querySelectorAll('select');
+                                        for (var j = 0; j < selects.length; j++) {
+                                            var sel = selects[j];
+                                            if (sel.offsetParent === null) continue;
+                                            if (sel.selectedIndex > 0) continue;
+                                            var slabel = getLabel(sel);
+                                            var desired = answers[slabel];
+                                            if (!desired) continue;
+                                            for (var k = 0; k < sel.options.length; k++) {
+                                                var opt = sel.options[k];
+                                                if (opt.value && opt.text.toLowerCase().indexOf(desired.toLowerCase()) >= 0) {
+                                                    sel.value = opt.value;
+                                                    sel.dispatchEvent(new Event('change', {bubbles: true}));
+                                                    filled[slabel] = opt.text.trim();
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        var textareas = outlet.querySelectorAll('textarea');
+                                        for (var ti = 0; ti < textareas.length; ti++) {
+                                            var ta = textareas[ti];
+                                            if (ta.offsetParent === null) continue;
+                                            if (ta.value && ta.value.trim()) continue;
+                                            var tlabel = getLabel(ta);
+                                            var tval = answers[tlabel];
+                                            if (tval) {
+                                                var tsetter = Object.getOwnPropertyDescriptor(
+                                                    window.HTMLTextAreaElement.prototype, 'value').set;
+                                                tsetter.call(ta, tval);
+                                                ta.dispatchEvent(new Event('input', {bubbles: true}));
+                                                ta.dispatchEvent(new Event('change', {bubbles: true}));
+                                                filled[tlabel] = tval;
+                                            }
+                                        }
+
+                                        return filled;
+                                    }
+                                """, llm_answers)
+
+                                if llm_fill_result:
+                                    filled.update(llm_fill_result)
+                                    all_filled.update(llm_fill_result)
+                                    logger.info("  LLM JS-filled %d fields: %s", len(llm_fill_result), llm_fill_result)
+
+                                # For radio buttons answered by LLM, click via Playwright
+                                for field_info in unfilled:
+                                    if field_info.get("type") != "radio":
+                                        continue
+                                    label = field_info.get("label", "")
+                                    answer = llm_answers.get(label)
+                                    name = field_info.get("name", "")
+                                    if not answer or not name:
+                                        continue
+                                    try:
+                                        # Find the radio with matching label via JS
+                                        radio_clicked = await modal_locator.evaluate("""
+                                            (outlet, args) => {
+                                                var group = outlet.querySelectorAll('input[type="radio"][name="' + args.name + '"]');
+                                                for (var i = 0; i < group.length; i++) {
+                                                    var r = group[i];
+                                                    var dl = r.getAttribute('data-test-text-selectable-option__input') || '';
+                                                    var lbl = '';
+                                                    if (r.id) {
+                                                        var labelEl = outlet.querySelector('label[for="' + r.id + '"]');
+                                                        if (labelEl && labelEl.textContent) lbl = labelEl.textContent.trim();
+                                                    }
+                                                    if (dl.toLowerCase() === args.answer.toLowerCase() ||
+                                                        (lbl && lbl.toLowerCase() === args.answer.toLowerCase())) {
+                                                        r.click();
+                                                        return dl || lbl || 'clicked';
+                                                    }
+                                                }
+                                                if (group.length > 0) { group[0].click(); return 'first'; }
+                                                return null;
+                                            }
+                                        """, {"name": name, "answer": answer})
+                                        if radio_clicked:
+                                            filled[f"radio:{name[:40]}"] = answer
+                                            all_filled[f"radio:{name[:40]}"] = answer
+                                            # Also click via Playwright for Ember
+                                            target_radio = wizard_ctx.locator(f"input[type='radio'][name='{name}']").first
+                                            if await target_radio.count() > 0:
+                                                target_id = await target_radio.get_attribute("id")
+                                                if target_id:
+                                                    lbl = wizard_ctx.locator(f"label[for='{target_id}']")
+                                                    if await lbl.count() > 0:
+                                                        await lbl.first.click()
+                                    except Exception as exc:
+                                        logger.debug("LLM radio click for '%s' failed: %s", label[:40], exc)
+
+                    except Exception as exc:
+                        logger.warning("LLM form filling failed: %s", exc)
+
+                # ---- Final stuck check ----
+                # If the page didn't change from prev step AND we didn't fill any new fields,
+                # we're truly stuck (validation errors we can't fix).
+                if page_unchanged and not filled:
+                    logger.warning("Wizard stuck at step %d — page unchanged and no fields filled!", step)
+                    result["failure_stage"] = f"stuck_step{step}"
+                    result["form_answers"] = all_filled
+                    return result
+                elif page_unchanged and filled:
+                    logger.info("Page unchanged but filled %d fields — retrying progression", len(filled))
 
                 # Find progression button — use fast JS approach first
                 btn, btn_type = None, None

@@ -205,9 +205,21 @@ WIZARD_RESUME_INPUT = "input[type='file']"
 # Form field selectors — prefer semantic matching over class-based
 WIZARD_TEXT_INPUT_SELECTORS = [
     "div.jobs-easy-apply-form-section input[type='text']",
+    "div.jobs-easy-apply-form-section input[type='number']",
+    "div.jobs-easy-apply-form-section input[type='tel']",
+    "div.jobs-easy-apply-form-section input[type='email']",
     "div[role='dialog'] input[type='text']",
+    "div[role='dialog'] input[type='number']",
+    "div[role='dialog'] input[type='tel']",
+    "div[role='dialog'] input[type='email']",
     "form input[type='text']",
+    "form input[type='number']",
+    "form input[type='tel']",
+    "form input[type='email']",
     "input[type='text']",
+    "input[type='number']",
+    "input[type='tel']",
+    "input[type='email']",
 ]
 WIZARD_TEXT_INPUT = "div.jobs-easy-apply-form-section input[type='text']"
 
