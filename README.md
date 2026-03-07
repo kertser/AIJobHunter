@@ -58,7 +58,7 @@ job passes your thresholds — applies via Easy Apply automatically.
 
 ```bash
 # 1. Clone & install (requires Python 3.13+ and uv)
-git clone https://github.com/your-org/AIJobHunter.git
+git clone https://github.com/kertser/AIJobHunter.git
 cd AIJobHunter
 uv sync
 
