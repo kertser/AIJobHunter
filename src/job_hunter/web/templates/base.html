@@ -13,13 +13,19 @@
 
     /* ── Navigation ──────────────────────────────── */
     nav {
-      background: linear-gradient(135deg, #1e3a5f 0%, #1a2744 100%);
+      all: unset;
+      display: block;
+      background: linear-gradient(135deg, #05172b 0%, #2064c6 100%);
       padding: 0 1.2rem;
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
       position: sticky; top: 0; z-index: 50;
+      text-align: center;
     }
-    nav ul {
-      list-style: none; display: flex; margin: 0; padding: 0;
+    nav > ul {
+      all: unset;
+      display: inline-flex !important;
+      list-style: none;
+      margin: 0; padding: 0;
       align-items: stretch; flex-wrap: wrap; gap: 0;
     }
     nav li { display: flex; align-items: stretch; }
@@ -117,13 +123,20 @@
       border-radius: 6px; transition: opacity 0.15s;
     }
     .action-btn:hover { opacity: 0.85; }
+
+    /* ── Top banner ───────────────────────────────── */
+    .top-banner {
+      display: block; width: 100%; height: auto;
+      object-fit: fill; max-height: 200px;
+    }
   </style>
   {% block extra_head %}{% endblock %}
 </head>
 <body>
+  <a href="/"><img src="/static/top_banner.png" alt="AI Job Hunter" class="top-banner"></a>
   <nav>
     <ul>
-      <li><a href="/" class="brand">🎯 AI Job Hunter</a></li>
+
       <li><a href="/"              data-tip="Overview stats &amp; quick actions">📊 Dashboard</a></li>
       <li><a href="/jobs"          data-tip="Browse, filter &amp; manage jobs">💼 Jobs</a></li>
       <li><a href="/run"           data-tip="Discover → Score → Apply">▶️ Pipeline</a></li>
