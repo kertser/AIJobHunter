@@ -260,7 +260,8 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
             )
             sess = make_session(engine)
             result_map = {"success": ApplicationResult.SUCCESS, "dry_run": ApplicationResult.DRY_RUN,
-                          "failed": ApplicationResult.FAILED, "blocked": ApplicationResult.BLOCKED}
+                          "failed": ApplicationResult.FAILED, "blocked": ApplicationResult.BLOCKED,
+                          "already_applied": ApplicationResult.ALREADY_APPLIED}
             attempt = ApplicationAttempt(
                 job_hash=job_hash_val, result=result_map.get(result["result"], ApplicationResult.FAILED),
                 failure_stage=result.get("failure_stage"),
@@ -268,7 +269,8 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
             )
             save_attempt(sess, attempt)
             status_map = {"success": JobStatus.APPLIED, "dry_run": JobStatus.APPLIED,
-                          "failed": JobStatus.FAILED, "blocked": JobStatus.BLOCKED}
+                          "failed": JobStatus.FAILED, "blocked": JobStatus.BLOCKED,
+                          "already_applied": JobStatus.APPLIED}
             from job_hunter.db.models import Job as JobModel
             db_job = sess.execute(select(JobModel).where(JobModel.hash == job_hash_val)).scalar_one_or_none()
             if db_job:

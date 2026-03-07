@@ -18,29 +18,31 @@ MAX_WIZARD_STEPS = 10  # Safety limit to avoid infinite loops
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _save_debug_html(page, label: str) -> None:
-    """Save current page HTML for debugging — includes main page + all frames."""
+async def _save_debug_html(page, label: str, *, include_frames: bool = False) -> None:
+    """Save current page HTML for debugging.
+
+    *include_frames* controls whether every frame's HTML is also dumped
+    (slow — only use for error/final steps).
+    """
     try:
         safe_label = label.replace(" ", "_").replace("/", "_")
-        # Main page
         html = await page.content()
         debug_path = Path(f"data/debug_apply_{safe_label}.html")
         debug_path.parent.mkdir(parents=True, exist_ok=True)
         debug_path.write_text(html, encoding="utf-8")
         logger.debug("Saved main page HTML (%s) → %s (%d bytes)", label, debug_path, len(html))
 
-        # Also dump every frame's HTML
-        for idx, frame in enumerate(page.frames):
-            if frame == page.main_frame:
-                continue
-            try:
-                frame_html = await frame.content()
-                if len(frame_html) > 500:  # skip trivial/empty frames
-                    fp = Path(f"data/debug_apply_{safe_label}_frame{idx}.html")
-                    fp.write_text(frame_html, encoding="utf-8")
-                    logger.debug("  frame %d (%s): %d bytes", idx, frame.url[:80], len(frame_html))
-            except Exception:
-                pass
+        if include_frames:
+            for idx, frame in enumerate(page.frames):
+                if frame == page.main_frame:
+                    continue
+                try:
+                    frame_html = await frame.content()
+                    if len(frame_html) > 500:
+                        fp = Path(f"data/debug_apply_{safe_label}_frame{idx}.html")
+                        fp.write_text(frame_html, encoding="utf-8")
+                except Exception:
+                    pass
     except Exception as exc:
         logger.debug("Failed to save debug HTML (%s): %s", label, exc)
 
@@ -341,7 +343,7 @@ async def apply_to_job(
                 logger.warning("Challenge detected! Marking as BLOCKED.")
                 result["result"] = "blocked"
                 result["failure_stage"] = "challenge"
-                await _save_debug_html(page, "challenge")
+                await _save_debug_html(page, "challenge", include_frames=True)
                 return result
 
             # ---- Find and click Easy Apply button ----
@@ -368,7 +370,49 @@ async def apply_to_job(
                         break
 
             if easy_apply_btn is None:
-                await _save_debug_html(page, "no_easy_apply")
+                # --- Check for "Already applied" indicators ---
+                already_applied = False
+                for ctx in [page] + [f for f in page.frames if f != page.main_frame]:
+                    try:
+                        applied_indicator = await ctx.evaluate("""
+                            () => {
+                                // Check for common "already applied" UI patterns
+                                const indicators = [
+                                    // Button text: "Applied", "Submitted", etc.
+                                    ...document.querySelectorAll('button, a, span, div'),
+                                ].filter(el => {
+                                    const t = (el.textContent || '').trim().toLowerCase();
+                                    return (
+                                        t === 'applied' ||
+                                        t === 'submitted' ||
+                                        t === 'already applied' ||
+                                        t.includes('application submitted') ||
+                                        t.includes('you applied') ||
+                                        t.includes('application sent')
+                                    ) && el.offsetParent !== null;
+                                });
+                                if (indicators.length > 0) return indicators[0].textContent.trim();
+                                // Check aria-labels
+                                const ariaEls = document.querySelectorAll('[aria-label*="Applied"], [aria-label*="applied"], [aria-label*="Submitted"]');
+                                for (const el of ariaEls) {
+                                    if (el.offsetParent !== null) return el.getAttribute('aria-label');
+                                }
+                                return null;
+                            }
+                        """)
+                        if applied_indicator:
+                            already_applied = True
+                            logger.info("Already applied indicator found: '%s'", applied_indicator)
+                            break
+                    except Exception:
+                        continue
+
+                if already_applied:
+                    logger.info("Job already applied to — skipping: %s", job_url)
+                    result["result"] = "already_applied"
+                    return result
+
+                await _save_debug_html(page, "no_easy_apply", include_frames=True)
                 logger.warning("No Easy Apply button found on %s (URL: %s)", job_url, page.url)
                 result["failure_stage"] = "no_easy_apply"
                 return result
@@ -381,7 +425,7 @@ async def apply_to_job(
             wizard_ctx, wizard_found = await _wait_for_wizard_content(page)
 
             if not wizard_found:
-                await _save_debug_html(page, "wizard_not_found")
+                await _save_debug_html(page, "wizard_not_found", include_frames=True)
                 logger.warning("Wizard content did not appear after clicking Easy Apply")
                 result["failure_stage"] = "wizard_not_found"
                 return result
@@ -394,19 +438,20 @@ async def apply_to_job(
 
             for step in range(1, MAX_WIZARD_STEPS + 1):
                 logger.info("Wizard step %d", step)
-                await _save_debug_html(page, f"step{step}")
 
                 # Re-acquire wizard context each step (content may have changed)
                 wizard_ctx, _ = await _get_wizard_context(page)
 
                 # Try to scope operations to the modal outlet for Ember frames
                 modal_scope = wizard_ctx
+                modal_locator = None  # Will be set if we find the outlet via locator
                 try:
                     outlet = wizard_ctx.locator("#artdeco-modal-outlet")
                     if await outlet.count() > 0:
                         inner = await outlet.inner_html()
                         if len(inner.strip()) > 50:
                             modal_scope = outlet
+                            modal_locator = outlet
                             logger.debug("Scoped to #artdeco-modal-outlet (%d chars)", len(inner))
 
                             # Save the live DOM content of the modal for debugging
@@ -420,48 +465,43 @@ async def apply_to_job(
 
                 # ---- Log what the wizard contains ----
                 try:
-                    diag = await wizard_ctx.evaluate("""
-                        () => {
-                            const outlet = document.getElementById('artdeco-modal-outlet');
-                            if (!outlet) return {outlet: false};
-                            const inputs = outlet.querySelectorAll('input:not([type="hidden"])');
-                            const selects = outlet.querySelectorAll('select');
-                            const textareas = outlet.querySelectorAll('textarea');
-                            const buttons = outlet.querySelectorAll('button');
-                            const labels = outlet.querySelectorAll('label');
-                            const errors = outlet.querySelectorAll('[class*="error"], [class*="invalid"], [role="alert"]');
-                            return {
-                                outlet: true,
-                                outletHTML: outlet.innerHTML.length,
-                                inputs: Array.from(inputs).map(i => ({type: i.type, name: i.name, id: i.id, value: i.value, required: i.required, ariaLabel: i.getAttribute('aria-label')})),
-                                selects: Array.from(selects).map(s => ({name: s.name, id: s.id, ariaLabel: s.getAttribute('aria-label')})),
-                                textareas: Array.from(textareas).map(t => ({name: t.name, id: t.id, ariaLabel: t.getAttribute('aria-label')})),
-                                buttons: Array.from(buttons).map(b => ({text: b.textContent.trim().substring(0,60), ariaLabel: b.getAttribute('aria-label'), disabled: b.disabled, type: b.type})),
-                                labels: Array.from(labels).map(l => l.textContent.trim().substring(0,60)),
-                                errors: Array.from(errors).map(e => e.textContent.trim().substring(0,100)),
-                                headings: Array.from(outlet.querySelectorAll('h1,h2,h3')).map(h => h.textContent.trim().substring(0,80)),
-                            };
-                        }
-                    """)
+                    if modal_locator:
+                        # Run diagnostics on the actual modal element (locator-scoped)
+                        diag = await modal_locator.evaluate("""
+                            (outlet) => {
+                                const inputs = outlet.querySelectorAll('input:not([type="hidden"])');
+                                const selects = outlet.querySelectorAll('select');
+                                const textareas = outlet.querySelectorAll('textarea');
+                                const buttons = outlet.querySelectorAll('button');
+                                const labels = outlet.querySelectorAll('label');
+                                const radios = outlet.querySelectorAll('input[type="radio"]');
+                                const errors = outlet.querySelectorAll('[class*="error"], [class*="invalid"], [role="alert"]');
+                                return {
+                                    outlet: true,
+                                    outletHTML: outlet.innerHTML.length,
+                                    inputs: Array.from(inputs).map(i => ({type: i.type, name: i.name, id: i.id, value: i.value, required: i.required, ariaLabel: i.getAttribute('aria-label')})),
+                                    selects: Array.from(selects).map(s => ({name: s.name, id: s.id, ariaLabel: s.getAttribute('aria-label')})),
+                                    textareas: Array.from(textareas).map(t => ({name: t.name, id: t.id, ariaLabel: t.getAttribute('aria-label')})),
+                                    buttons: Array.from(buttons).map(b => ({text: b.textContent.trim().substring(0,60), ariaLabel: b.getAttribute('aria-label'), disabled: b.disabled, type: b.type})),
+                                    labels: Array.from(labels).map(l => l.textContent.trim().substring(0,60)),
+                                    radios: radios.length,
+                                    errors: Array.from(errors).map(e => e.textContent.trim().substring(0,100)),
+                                    headings: Array.from(outlet.querySelectorAll('h1,h2,h3')).map(h => h.textContent.trim().substring(0,80)),
+                                };
+                            }
+                        """)
+                    else:
+                        diag = {"outlet": False}
                     if diag.get("outlet"):
-                        logger.info("Step %d modal: %d chars, %d inputs, %d selects, %d textareas, %d buttons",
+                        logger.info("Step %d modal: %d chars, %d inputs, %d selects, %d textareas, %d buttons, %d radios",
                                     step, diag["outletHTML"], len(diag["inputs"]), len(diag["selects"]),
-                                    len(diag["textareas"]), len(diag["buttons"]))
+                                    len(diag["textareas"]), len(diag["buttons"]), diag.get("radios", 0))
                         if diag["headings"]:
                             logger.info("  Headings: %s", diag["headings"])
-                        if diag["inputs"]:
-                            logger.info("  Inputs: %s", diag["inputs"])
-                        if diag["selects"]:
-                            logger.info("  Selects: %s", diag["selects"])
-                        if diag["textareas"]:
-                            logger.info("  Textareas: %s", diag["textareas"])
-                        for b in diag["buttons"]:
-                            logger.info("  Button: text=%r, aria=%r, disabled=%s, type=%s",
-                                        b["text"], b["ariaLabel"], b["disabled"], b["type"])
-                        if diag["labels"]:
-                            logger.info("  Labels: %s", diag["labels"][:10])
                         if diag["errors"]:
                             logger.warning("  Validation errors: %s", diag["errors"])
+                    else:
+                        logger.warning("Step %d: modal outlet not found for diagnostics", step)
                 except Exception as exc:
                     logger.debug("Diagnostics failed: %s", exc)
 
@@ -498,36 +538,32 @@ async def apply_to_job(
                             except Exception:
                                 pass
 
-                # Fill form fields — try scoped to modal first, then full context
+                # Fill form fields — use modal_locator if available (works across frame boundaries)
+                # Locator.locator() works for sub-selectors, and Locator.evaluate() runs in element context
                 filled: dict[str, str] = {}
-                for scope in ([modal_scope, wizard_ctx] if modal_scope is not wizard_ctx else [wizard_ctx]):
+                fill_ctx = modal_locator if modal_locator else wizard_ctx
+                try:
+                    filled = await fill_form_fields(fill_ctx, form_answers)
+                    if filled:
+                        logger.info("  Filled %d fields: %s", len(filled), filled)
+                except Exception as exc:
+                    logger.debug("fill_form_fields failed: %s", exc)
+
+                # Always try JS fallback too (handles fields the Playwright approach missed)
+                if modal_locator:
                     try:
-                        filled = await fill_form_fields(scope if hasattr(scope, 'locator') else wizard_ctx, form_answers)
-                        if filled:
-                            logger.info("  Filled %d fields: %s", len(filled), filled)
-                            break
-                    except Exception:
-                        pass
-                # Also try filling via JS directly in the Ember modal outlet
-                if not filled:
-                    try:
-                        js_filled = await wizard_ctx.evaluate("""
-                            (answers) => {
-                                const outlet = document.getElementById('artdeco-modal-outlet');
-                                if (!outlet) return {};
+                        js_filled = await modal_locator.evaluate("""
+                            (outlet, answers) => {
                                 const filled = {};
 
                                 // Smart label matching
                                 function lookupAnswer(label) {
                                     if (!label) return '';
                                     const norm = label.toLowerCase().replace(/[\\n\\r]+/g, ' ').trim();
-                                    // Exact match
                                     if (answers[norm]) return answers[norm];
-                                    // Substring match: check if any key is in the label
                                     for (const [key, val] of Object.entries(answers)) {
                                         if (norm.includes(key)) return val;
                                     }
-                                    // Keyword matching
                                     const kwMap = {
                                         'first name': ['first name', 'given name'],
                                         'last name': ['last name', 'family name', 'surname'],
@@ -548,7 +584,7 @@ async def apply_to_job(
                                 const inputs = outlet.querySelectorAll('input[type="text"]:not([readonly]), input:not([type]):not([readonly])');
                                 inputs.forEach(inp => {
                                     if (inp.offsetParent === null) return;
-                                    if (inp.value && inp.value.trim()) return; // skip pre-filled
+                                    if (inp.value && inp.value.trim()) return;
                                     const label = inp.getAttribute('aria-label') || inp.name || inp.id || '';
                                     const val = lookupAnswer(label);
                                     if (val) {
@@ -564,13 +600,10 @@ async def apply_to_job(
                                 const selects = outlet.querySelectorAll('select');
                                 selects.forEach(sel => {
                                     if (sel.offsetParent === null) return;
-                                    // Skip if already has a valid selection
                                     if (sel.selectedIndex > 0) return;
                                     const label = sel.getAttribute('aria-label') || sel.name || sel.id || '';
                                     const desired = lookupAnswer(label);
-
                                     let found = false;
-                                    // Try to match option text
                                     if (desired) {
                                         for (const opt of sel.options) {
                                             if (opt.value && opt.text.toLowerCase().includes(desired.toLowerCase())) {
@@ -580,7 +613,6 @@ async def apply_to_job(
                                             }
                                         }
                                     }
-                                    // Fallback: select first non-placeholder option
                                     if (!found) {
                                         for (const opt of sel.options) {
                                             if (opt.value && opt.text.trim() && !opt.text.toLowerCase().includes('select')) {
@@ -595,6 +627,7 @@ async def apply_to_job(
                                         filled[label] = sel.options[sel.selectedIndex]?.text || sel.value;
                                     }
                                 });
+
                                 return filled;
                             }
                         """, form_answers or {})
@@ -603,14 +636,117 @@ async def apply_to_job(
                             logger.info("  JS-filled %d fields: %s", len(js_filled), js_filled)
                     except Exception as exc:
                         logger.debug("JS form fill failed: %s", exc)
+
+                # --- Playwright-based radio click (Ember needs real user-like clicks) ---
+                if modal_locator:
+                    try:
+                        unchecked = await modal_locator.evaluate("""
+                            (root) => {
+                                const radios = root.querySelectorAll('input[type="radio"]');
+                                const groups = {};
+                                radios.forEach(r => {
+                                    if (!r.name) return;
+                                    if (!groups[r.name]) groups[r.name] = [];
+                                    groups[r.name].push({
+                                        id: r.id,
+                                        checked: r.checked,
+                                        dataLabel: r.getAttribute('data-test-text-selectable-option__input') || '',
+                                    });
+                                });
+                                const result = [];
+                                for (const [name, opts] of Object.entries(groups)) {
+                                    if (opts.some(o => o.checked)) continue;
+                                    const yesOpt = opts.find(o => o.dataLabel.toLowerCase() === 'yes');
+                                    result.push({
+                                        name: name,
+                                        targetId: yesOpt ? yesOpt.id : (opts[0] ? opts[0].id : null),
+                                        label: yesOpt ? 'Yes' : 'first',
+                                    });
+                                }
+                                return result;
+                            }
+                        """)
+                        if unchecked:
+                            logger.info("Found %d unchecked radio groups, clicking via Playwright", len(unchecked))
+                            for group in unchecked:
+                                target_id = group.get("targetId")
+                                if not target_id:
+                                    continue
+                                try:
+                                    # Click the label (Ember reacts to label clicks)
+                                    label_loc = wizard_ctx.locator(f"label[for='{target_id}']")
+                                    if await label_loc.count() > 0:
+                                        await label_loc.first.click()
+                                        filled[f"radio:{group['name'][:40]}"] = group["label"]
+                                        logger.info("  Clicked radio label '%s' for group %s",
+                                                    group["label"], group["name"][:50])
+                                    else:
+                                        # Fallback: click the input directly
+                                        inp_loc = wizard_ctx.locator(f"#{target_id}")
+                                        if await inp_loc.count() > 0:
+                                            await inp_loc.first.click()
+                                            filled[f"radio:{group['name'][:40]}"] = group["label"]
+                                            logger.info("  Clicked radio input '%s' for group %s",
+                                                        group["label"], group["name"][:50])
+                                except Exception as exc:
+                                    logger.debug("Failed to click radio for %s: %s", group.get("name", "?")[:30], exc)
+                        else:
+                            logger.debug("No unchecked radio groups found")
+                    except Exception as exc:
+                        logger.debug("Playwright radio click failed: %s", exc)
+
                 all_filled.update(filled)
 
-                # Find progression button — search in modal scope first, then full context
+                # Find progression button — use fast JS approach first
                 btn, btn_type = None, None
-                for search_ctx in ([modal_scope, wizard_ctx] if modal_scope is not wizard_ctx else [wizard_ctx]):
-                    btn, btn_type = await _find_progression_button(search_ctx)
-                    if btn is not None:
-                        break
+
+                # Fast JS-based button search in the modal
+                if modal_locator:
+                    try:
+                        btn_info = await modal_locator.evaluate("""
+                            (outlet) => {
+                                const buttons = outlet.querySelectorAll('button');
+                                const priorities = [
+                                    {type: 'submit', patterns: ['submit application', 'submit']},
+                                    {type: 'review', patterns: ['review your application', 'review']},
+                                    {type: 'next', patterns: ['continue to next step', 'continue', 'next']},
+                                ];
+                                for (const {type, patterns} of priorities) {
+                                    for (const btn of buttons) {
+                                        if (btn.offsetParent === null || btn.disabled) continue;
+                                        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+                                        const text = (btn.textContent || '').trim().toLowerCase();
+                                        for (const p of patterns) {
+                                            if (aria.includes(p) || text === p || text.includes(p)) {
+                                                if (btn.id) return {id: btn.id, type: type};
+                                                if (aria) return {aria: btn.getAttribute('aria-label'), type: type};
+                                                return {text: btn.textContent.trim(), type: type};
+                                            }
+                                        }
+                                    }
+                                }
+                                return null;
+                            }
+                        """)
+                        if btn_info:
+                            btn_type = btn_info["type"]
+                            if "id" in btn_info:
+                                btn = wizard_ctx.locator(f"#{btn_info['id']}")
+                            elif "aria" in btn_info:
+                                btn = wizard_ctx.locator(f"button[aria-label='{btn_info['aria']}']").first
+                            elif "text" in btn_info:
+                                btn = wizard_ctx.locator(f"button:has-text('{btn_info['text']}')").first
+                            if btn and await btn.count() == 0:
+                                btn = None
+                    except Exception:
+                        pass
+
+                # Fallback to Playwright-based search if JS didn't find it
+                if btn is None:
+                    for search_ctx in ([modal_scope, wizard_ctx] if modal_scope is not wizard_ctx else [wizard_ctx]):
+                        btn, btn_type = await _find_progression_button(search_ctx)
+                        if btn is not None:
+                            break
 
                 if btn is None:
                     # Check for success text
@@ -627,7 +763,7 @@ async def apply_to_job(
                     except Exception:
                         pass
 
-                    await _save_debug_html(page, f"step{step}_no_button")
+                    await _save_debug_html(page, f"step{step}_no_button", include_frames=True)
                     logger.warning("No progression button found at step %d", step)
                     result["failure_stage"] = f"step{step}"
                     result["form_answers"] = all_filled
@@ -677,13 +813,13 @@ async def apply_to_job(
                         result["result"] = "success"
                         logger.info("Submit clicked (assuming success)")
 
-                    await _save_debug_html(page, "after_submit")
+                    await _save_debug_html(page, "after_submit", include_frames=True)
                     result["form_answers"] = all_filled
                     return result
                 else:
                     logger.info("Clicking '%s' button at step %d", btn_type, step)
                     await btn.click()
-                    await page.wait_for_timeout(2000)
+                    await page.wait_for_timeout(1500)
 
             # Exhausted steps
             logger.warning("Exhausted max wizard steps (%d)", MAX_WIZARD_STEPS)
@@ -695,7 +831,7 @@ async def apply_to_job(
             result["result"] = "failed"
             result["failure_stage"] = f"exception: {type(exc).__name__}: {exc}"
             try:
-                await _save_debug_html(page, "exception")
+                await _save_debug_html(page, "exception", include_frames=True)
             except Exception:
                 pass
 

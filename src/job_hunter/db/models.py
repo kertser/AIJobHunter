@@ -36,6 +36,7 @@ class ApplicationResult(str, enum.Enum):
     FAILED = "failed"
     BLOCKED = "blocked"
     DRY_RUN = "dry_run"
+    ALREADY_APPLIED = "already_applied"
 
 
 class Job(Base):

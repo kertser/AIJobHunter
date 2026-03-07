@@ -7,36 +7,56 @@
 {% if user_profile %}
 <h3>User Profile</h3>
 <form id="user-profile-form" onsubmit="saveUserProfile(event)">
-  <div class="grid">
-    <label>Name <input name="name" value="{{ user_profile.name }}"></label>
-    <label>Title <input name="title" value="{{ user_profile.title }}"></label>
-  </div>
-  <label>Summary <textarea name="summary" rows="3">{{ user_profile.summary }}</textarea></label>
-  <div class="grid">
-    <label>Skills <small>(comma-separated)</small>
-      <input name="skills" value="{{ user_profile.skills | join(', ') }}">
+  <fieldset>
+    <legend><strong>📋 Contact Information</strong> <small>(used for Easy Apply forms)</small></legend>
+    <div class="grid">
+      <label>First Name <input name="first_name" value="{{ user_profile.first_name or '' }}"></label>
+      <label>Last Name <input name="last_name" value="{{ user_profile.last_name or '' }}"></label>
+    </div>
+    <div class="grid">
+      <label>Email Address <input name="email" type="email" value="{{ user_profile.email or '' }}" placeholder="your@email.com"></label>
+      <label>Phone Country Code
+        <input name="phone_country_code" value="{{ user_profile.phone_country_code or '' }}" placeholder="+972">
+      </label>
+      <label>Phone Number
+        <input name="phone" value="{{ user_profile.phone or '' }}" placeholder="54-1234567">
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend><strong>👤 Professional Profile</strong></legend>
+    <div class="grid">
+      <label>Full Name <input name="name" value="{{ user_profile.name }}"></label>
+      <label>Title <input name="title" value="{{ user_profile.title }}"></label>
+    </div>
+    <label>Summary <textarea name="summary" rows="3">{{ user_profile.summary }}</textarea></label>
+    <div class="grid">
+      <label>Skills <small>(comma-separated)</small>
+        <input name="skills" value="{{ user_profile.skills | join(', ') }}">
+      </label>
+      <label>Experience (years)
+        <input name="experience_years" type="number" value="{{ user_profile.experience_years }}">
+      </label>
+    </div>
+    <div class="grid">
+      <label>Seniority Level <input name="seniority_level" value="{{ user_profile.seniority_level }}"></label>
+      <label>Desired Roles <small>(comma-separated)</small>
+        <input name="desired_roles" value="{{ user_profile.desired_roles | join(', ') }}">
+      </label>
+    </div>
+    <div class="grid">
+      <label>Preferred Locations <small>(comma-separated)</small>
+        <input name="preferred_locations" value="{{ user_profile.preferred_locations | join(', ') }}">
+      </label>
+      <label>Education <small>(comma-separated)</small>
+        <input name="education" value="{{ user_profile.education | join(', ') }}">
+      </label>
+    </div>
+    <label>Languages <small>(comma-separated)</small>
+      <input name="languages" value="{{ user_profile.languages | join(', ') }}">
     </label>
-    <label>Experience (years)
-      <input name="experience_years" type="number" value="{{ user_profile.experience_years }}">
-    </label>
-  </div>
-  <div class="grid">
-    <label>Seniority Level <input name="seniority_level" value="{{ user_profile.seniority_level }}"></label>
-    <label>Desired Roles <small>(comma-separated)</small>
-      <input name="desired_roles" value="{{ user_profile.desired_roles | join(', ') }}">
-    </label>
-  </div>
-  <div class="grid">
-    <label>Preferred Locations <small>(comma-separated)</small>
-      <input name="preferred_locations" value="{{ user_profile.preferred_locations | join(', ') }}">
-    </label>
-    <label>Education <small>(comma-separated)</small>
-      <input name="education" value="{{ user_profile.education | join(', ') }}">
-    </label>
-  </div>
-  <label>Languages <small>(comma-separated)</small>
-    <input name="languages" value="{{ user_profile.languages | join(', ') }}">
-  </label>
+  </fieldset>
   <button type="submit">💾 Save User Profile</button>
 </form>
 {% else %}
@@ -132,6 +152,11 @@ function saveUserProfile(e) {
   var fd = new FormData(form);
   var data = {
     name: fd.get('name') || '',
+    first_name: fd.get('first_name') || '',
+    last_name: fd.get('last_name') || '',
+    email: fd.get('email') || '',
+    phone: fd.get('phone') || '',
+    phone_country_code: fd.get('phone_country_code') || '',
     title: fd.get('title') || '',
     summary: fd.get('summary') || '',
     skills: csvToList(fd.get('skills')),

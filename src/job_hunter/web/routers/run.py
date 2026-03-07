@@ -245,7 +245,8 @@ async def run_apply(request: Request):
                     form_answers=profile_form_answers,
                 )
                 result_map = {"success": ApplicationResult.SUCCESS, "dry_run": ApplicationResult.DRY_RUN,
-                              "failed": ApplicationResult.FAILED, "blocked": ApplicationResult.BLOCKED}
+                              "failed": ApplicationResult.FAILED, "blocked": ApplicationResult.BLOCKED,
+                              "already_applied": ApplicationResult.ALREADY_APPLIED}
                 attempt = ApplicationAttempt(
                     job_hash=job.hash, result=result_map.get(result["result"], ApplicationResult.FAILED),
                     failure_stage=result.get("failure_stage"),
@@ -253,9 +254,10 @@ async def run_apply(request: Request):
                 )
                 save_attempt(session, attempt)
                 status_map = {"success": JobStatus.APPLIED, "dry_run": JobStatus.APPLIED,
-                              "failed": JobStatus.FAILED, "blocked": JobStatus.BLOCKED}
+                              "failed": JobStatus.FAILED, "blocked": JobStatus.BLOCKED,
+                              "already_applied": JobStatus.APPLIED}
                 job.status = status_map.get(result["result"], JobStatus.FAILED)
-                if result["result"] in ("success", "dry_run"):
+                if result["result"] in ("success", "dry_run", "already_applied"):
                     applied += 1
                 if result["result"] == "blocked":
                     break

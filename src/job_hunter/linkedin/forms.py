@@ -261,27 +261,121 @@ async def fill_form_fields(page: PageOrFrame, answers: dict[str, str] | None = N
                 filled[label_text] = desired_value
                 logger.info("Selected dropdown '%s' = '%s'", label_text, desired_value)
 
-    # --- Radio buttons / checkboxes (SDUI may use these) ---
+    # --- Radio buttons / checkboxes ---
+    # Use a single JS call for speed (each Playwright round-trip is slow in iframes)
     try:
-        radios = page.locator("div[role='dialog'] input[type='radio'], form input[type='radio']")
-        radio_count = await radios.count()
-        if radio_count > 0:
-            # For each radio group, select the first option if none selected
-            seen_names: set[str] = set()
-            for i in range(radio_count):
-                radio = radios.nth(i)
-                try:
-                    name = await radio.get_attribute("name") or f"radio_{i}"
-                    if name not in seen_names:
-                        seen_names.add(name)
-                        is_checked = await radio.is_checked()
-                        if not is_checked:
-                            await radio.check()
-                            logger.debug("Checked first radio for group '%s'", name)
-                except Exception:
-                    continue
-    except Exception:
-        pass
+        # When page is a Locator, evaluate() passes the matched element as first arg.
+        # When page is a Frame/Page, evaluate() gets no args — we use document as root.
+        is_locator = hasattr(page, 'evaluate') and not hasattr(page, 'goto')
+        if is_locator:
+            radio_results = await page.evaluate("""
+                (root) => {
+                    const radios = root.querySelectorAll('input[type="radio"]');
+                    if (radios.length === 0) return {count: 0, filled: {}};
+
+                    const filled = {};
+                    const seenGroups = new Set();
+
+                    radios.forEach(radio => {
+                        const name = radio.name;
+                        if (!name || seenGroups.has(name)) return;
+
+                        const group = root.querySelectorAll('input[type="radio"][name="' + name + '"]');
+                        let hasSelection = false;
+                        group.forEach(r => { if (r.checked) hasSelection = true; });
+                        if (hasSelection) { seenGroups.add(name); return; }
+                        seenGroups.add(name);
+
+                        let clicked = false;
+                        group.forEach(r => {
+                            if (clicked) return;
+                            const dataLabel = r.getAttribute('data-test-text-selectable-option__input') || '';
+                            if (dataLabel.toLowerCase() === 'yes') {
+                                r.click();
+                                filled['radio:' + name.substring(0, 50)] = 'Yes';
+                                clicked = true;
+                            }
+                        });
+                        if (!clicked) {
+                            group.forEach(r => {
+                                if (clicked) return;
+                                const lbl = r.id ? root.querySelector('label[for="' + r.id + '"]') : null;
+                                if (lbl && lbl.textContent.trim().toLowerCase() === 'yes') {
+                                    r.click();
+                                    filled['radio:' + name.substring(0, 50)] = 'Yes';
+                                    clicked = true;
+                                }
+                            });
+                        }
+                        if (!clicked && group.length > 0) {
+                            group[0].click();
+                            filled['radio:' + name.substring(0, 50)] = 'first_option';
+                        }
+                    });
+
+                    return {count: radios.length, filled: filled};
+                }
+            """)
+        else:
+            radio_results = await page.evaluate("""
+                () => {
+                    const root = document.getElementById('artdeco-modal-outlet')
+                                 || document.querySelector('div[role="dialog"]')
+                                 || document;
+                    const radios = root.querySelectorAll('input[type="radio"]');
+                    if (radios.length === 0) return {count: 0, filled: {}};
+
+                    const filled = {};
+                    const seenGroups = new Set();
+
+                    radios.forEach(radio => {
+                        const name = radio.name;
+                        if (!name || seenGroups.has(name)) return;
+
+                        const group = root.querySelectorAll('input[type="radio"][name="' + name + '"]');
+                        let hasSelection = false;
+                        group.forEach(r => { if (r.checked) hasSelection = true; });
+                        if (hasSelection) { seenGroups.add(name); return; }
+                        seenGroups.add(name);
+
+                        let clicked = false;
+                        group.forEach(r => {
+                            if (clicked) return;
+                            const dataLabel = r.getAttribute('data-test-text-selectable-option__input') || '';
+                            if (dataLabel.toLowerCase() === 'yes') {
+                                r.click();
+                                filled['radio:' + name.substring(0, 50)] = 'Yes';
+                                clicked = true;
+                            }
+                        });
+                        if (!clicked) {
+                            group.forEach(r => {
+                                if (clicked) return;
+                                const lbl = r.id ? root.querySelector('label[for="' + r.id + '"]') : null;
+                                if (lbl && lbl.textContent.trim().toLowerCase() === 'yes') {
+                                    r.click();
+                                    filled['radio:' + name.substring(0, 50)] = 'Yes';
+                                    clicked = true;
+                                }
+                            });
+                        }
+                        if (!clicked && group.length > 0) {
+                            group[0].click();
+                            filled['radio:' + name.substring(0, 50)] = 'first_option';
+                        }
+                    });
+
+                    return {count: radios.length, filled: filled};
+                }
+            """)
+        if radio_results and radio_results.get("count", 0) > 0:
+            logger.info("Radio buttons: %d found, %d groups filled",
+                        radio_results["count"], len(radio_results.get("filled", {})))
+            for k, v in radio_results.get("filled", {}).items():
+                filled[k] = v
+                logger.info("  %s = %s", k, v)
+    except Exception as exc:
+        logger.debug("Radio button JS handling failed: %s", exc)
 
     return filled
 
