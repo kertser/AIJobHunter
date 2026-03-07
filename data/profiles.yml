@@ -8,7 +8,7 @@ profiles:
   - Machine Learning
   - Deep Learning
   location: Israel
-  remote: true
+  remote: false
   seniority:
   - Senior
   - Mid-Senior
@@ -28,7 +28,7 @@ profiles:
   - Numerical Analysis
   - Simulation
   location: Israel
-  remote: true
+  remote: false
   seniority:
   - Senior
   - Mid-Senior
@@ -48,7 +48,7 @@ profiles:
   - Keras
   - PyTorch
   location: Israel
-  remote: true
+  remote: false
   seniority:
   - Senior
   - Mid-Senior

@@ -48,6 +48,7 @@ async def run_pipeline(
     blacklist_titles: list[str] | None = None,
     resume_text: str = "",
     resume_path: str = "",
+    cookies_path: str = "",
     keywords: list[str] | None = None,
     location: str = "",
     remote: bool = False,
@@ -192,6 +193,7 @@ async def run_pipeline(
                 headless=headless,
                 slowmo_ms=slowmo_ms,
                 mock=mock,
+                cookies_path=str(data_dir / "cookies.json"),
             )
 
             result_map = {

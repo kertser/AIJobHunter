@@ -1,6 +1,11 @@
 user_profile:
   name: Mike Kertser
-  title: Head of Physics
+  first_name: Mike
+  last_name: Kertser
+  email: 'kertser@yahoo.com'
+  phone: '54-6490221'
+  phone_country_code: '+972'
+  title: Head of Physics, Data Scientist
   summary: Highly motivated physicist and algorithm developer with a strong passion
     for Machine Learning and technological innovations. Seeking opportunities in Data
     Science and Machine Learning to engage in interesting projects.
@@ -25,16 +30,11 @@ user_profile:
   - Machine Learning Engineer
   - Algorithm Developer
   - Physicist
-  seniority_level: Senior
+  seniority_level: Mid-Senior
   education:
   - M.Sc. in Physics (Condensed Matter Physics) - Tel Aviv University
   - B.Sc. in Physics and Computer Science - Ben-Gurion University of Negev
   languages:
-  - Python
-  - MATLAB
-  - C++
-  - Pascal
-  - Basic
   - Russian
   - English
   - Hebrew

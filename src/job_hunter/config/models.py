@@ -54,6 +54,11 @@ class UserProfile(BaseModel):
     """User profile extracted from resume and LinkedIn PDF."""
 
     name: str = ""
+    first_name: str = ""
+    last_name: str = ""
+    email: str = ""
+    phone: str = ""
+    phone_country_code: str = ""
     title: str = ""
     summary: str = ""
     skills: list[str] = Field(default_factory=list)
@@ -63,5 +68,55 @@ class UserProfile(BaseModel):
     seniority_level: str = ""
     education: list[str] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
+
+    def get_first_name(self) -> str:
+        """Return first name, deriving from full name if needed."""
+        if self.first_name:
+            return self.first_name
+        parts = self.name.split()
+        return parts[0] if parts else ""
+
+    def get_last_name(self) -> str:
+        """Return last name, deriving from full name if needed."""
+        if self.last_name:
+            return self.last_name
+        parts = self.name.split()
+        return " ".join(parts[1:]) if len(parts) > 1 else ""
+
+    def build_form_answers(self) -> dict[str, str]:
+        """Build a label→value mapping for Easy Apply form filling.
+
+        Keys are lowercase label text as LinkedIn renders them.
+        """
+        answers: dict[str, str] = {}
+        first = self.get_first_name()
+        last = self.get_last_name()
+
+        if first:
+            answers["first name"] = first
+        if last:
+            answers["last name"] = last
+        if self.email:
+            answers["email address"] = self.email
+            answers["email"] = self.email
+        if self.phone:
+            answers["mobile phone number"] = self.phone
+            answers["phone number"] = self.phone
+            answers["phone"] = self.phone
+        if self.phone_country_code:
+            answers["phone country code"] = self.phone_country_code
+        if self.title:
+            answers["headline"] = self.title
+            answers["current title"] = self.title
+        if self.summary:
+            answers["summary"] = self.summary
+        if self.experience_years:
+            years = str(self.experience_years)
+            answers["years of experience"] = years
+            answers["total years of experience"] = years
+        if self.preferred_locations:
+            answers["city"] = self.preferred_locations[0]
+            answers["location"] = self.preferred_locations[0]
+        return answers
 
 

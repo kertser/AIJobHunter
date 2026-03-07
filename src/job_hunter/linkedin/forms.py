@@ -4,25 +4,44 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Union
 
-from playwright.async_api import Page
+from playwright.async_api import Frame, Page
 
 from job_hunter.linkedin import selectors as sel
 
 logger = logging.getLogger("job_hunter.linkedin.forms")
 
+# Page and Frame share the same locator/evaluate API
+PageOrFrame = Union[Page, Frame]
 
-async def upload_resume(page: Page, resume_path: str | Path) -> None:
+
+async def upload_resume(page: PageOrFrame, resume_path: str | Path) -> None:
     """Upload a resume file via the file input in the wizard."""
     file_input = page.locator(sel.WIZARD_RESUME_INPUT)
     if await file_input.count() > 0:
-        await file_input.set_input_files(str(resume_path))
-        logger.info("Uploaded resume: %s", Path(resume_path).name)
+        try:
+            await file_input.set_input_files(str(resume_path))
+            logger.info("Uploaded resume: %s", Path(resume_path).name)
+        except Exception as exc:
+            logger.warning("Failed to upload resume: %s", exc)
     else:
         logger.debug("No file input found — resume may already be attached")
 
 
-async def fill_form_fields(page: Page, answers: dict[str, str] | None = None) -> dict[str, str]:
+async def _find_first_matching(page: PageOrFrame, selectors: list[str]):
+    """Try multiple selectors and return first matching locator."""
+    for selector in selectors:
+        try:
+            loc = page.locator(selector)
+            if await loc.count() > 0:
+                return loc
+        except Exception:
+            continue
+    return None
+
+
+async def fill_form_fields(page: PageOrFrame, answers: dict[str, str] | None = None) -> dict[str, str]:
     """Fill text inputs and selects in the current wizard step.
 
     *answers* maps lowercase label text → value. If a question is not in
@@ -33,54 +52,241 @@ async def fill_form_fields(page: Page, answers: dict[str, str] | None = None) ->
     answers = answers or {}
     filled: dict[str, str] = {}
 
-    # --- Text inputs ---
-    text_inputs = page.locator(sel.WIZARD_TEXT_INPUT)
-    count = await text_inputs.count()
-    for i in range(count):
-        inp = text_inputs.nth(i)
-        # Try to find the label
-        section = page.locator(sel.WIZARD_FORM_SECTION).filter(has=inp)
-        label_el = section.locator(sel.WIZARD_FORM_LABEL)
-        label_text = ""
-        if await label_el.count() > 0:
-            label_text = (await label_el.first.inner_text()).strip().lower()
+    def _lookup_answer(label: str, default: str = "") -> str:
+        """Smart lookup: exact match, then substring match on label keywords."""
+        if not label:
+            return default
+        # Normalize: collapse whitespace/newlines, lowercase
+        norm = " ".join(label.lower().split())
+        # 1. Exact match
+        if norm in answers:
+            return answers[norm]
+        # 2. Check if any answer key is contained in the label
+        for key, val in answers.items():
+            if key in norm:
+                return val
+        # 3. Check if the label is contained in any answer key
+        for key, val in answers.items():
+            if norm in key:
+                return val
+        # 4. Keyword-based matching
+        keywords_map = {
+            "first name": ["first name", "given name", "first_name"],
+            "last name": ["last name", "family name", "surname", "last_name"],
+            "email": ["email", "e-mail"],
+            "phone": ["phone", "mobile", "cell", "telephone"],
+            "country code": ["country code", "phone code"],
+            "city": ["city", "location"],
+            "headline": ["headline", "current title", "job title"],
+            "years of experience": ["years of experience", "experience years", "how many years"],
+        }
+        for answer_key, kw_list in keywords_map.items():
+            for kw in kw_list:
+                if kw in norm and answer_key in answers:
+                    return answers[answer_key]
+        return default
 
-        value = answers.get(label_text, "5")  # default answer
-        await inp.fill(value)
-        filled[label_text] = value
-        logger.debug("Filled text field '%s' = '%s'", label_text, value)
+    # --- Text inputs --- try multiple selector strategies
+    text_inputs = await _find_first_matching(page, sel.WIZARD_TEXT_INPUT_SELECTORS)
+    if text_inputs is not None:
+        count = await text_inputs.count()
+        for i in range(count):
+            inp = text_inputs.nth(i)
+            try:
+                if not await inp.is_visible():
+                    continue
+            except Exception:
+                continue
 
-    # --- Select dropdowns ---
-    selects = page.locator(sel.WIZARD_SELECT)
-    count = await selects.count()
-    for i in range(count):
-        sel_el = selects.nth(i)
-        section = page.locator(sel.WIZARD_FORM_SECTION).filter(has=sel_el)
-        label_el = section.locator(sel.WIZARD_FORM_LABEL)
-        label_text = ""
-        if await label_el.count() > 0:
-            label_text = (await label_el.first.inner_text()).strip().lower()
+            # Skip if field already has a value
+            try:
+                existing_val = await inp.input_value()
+                if existing_val and existing_val.strip():
+                    continue
+            except Exception:
+                pass
 
-        value = answers.get(label_text, "yes")  # default answer
-        # Try to select by value, fall back to selecting first non-empty option
-        try:
-            await sel_el.select_option(value=value)
-        except Exception:
-            options = await sel_el.locator("option").all()
-            for opt in options:
-                val = await opt.get_attribute("value")
-                if val:
-                    await sel_el.select_option(value=val)
-                    value = val
-                    break
+            # Try to find the label — try multiple strategies
+            label_text = ""
+            # Strategy 1: aria-label attribute
+            try:
+                aria = await inp.get_attribute("aria-label")
+                if aria:
+                    label_text = aria.strip().lower()
+            except Exception:
+                pass
 
-        filled[label_text] = value
-        logger.debug("Selected dropdown '%s' = '%s'", label_text, value)
+            # Strategy 2: associated <label> via for/id
+            if not label_text:
+                try:
+                    input_id = await inp.get_attribute("id")
+                    if input_id:
+                        label_el = page.locator(f"label[for='{input_id}']")
+                        if await label_el.count() > 0:
+                            label_text = (await label_el.first.inner_text()).strip().lower()
+                except Exception:
+                    pass
+
+            # Strategy 3: closest form section with label
+            if not label_text:
+                for section_sel in sel.WIZARD_FORM_SECTION_SELECTORS:
+                    try:
+                        section = page.locator(section_sel).filter(has=inp)
+                        label_el = section.locator(sel.WIZARD_FORM_LABEL)
+                        if await label_el.count() > 0:
+                            label_text = (await label_el.first.inner_text()).strip().lower()
+                            if label_text:
+                                break
+                    except Exception:
+                        continue
+
+            # Strategy 4: placeholder text
+            if not label_text:
+                try:
+                    placeholder = await inp.get_attribute("placeholder")
+                    if placeholder:
+                        label_text = placeholder.strip().lower()
+                except Exception:
+                    pass
+
+            value = _lookup_answer(label_text)
+            if not value:
+                logger.debug("No answer for text field '%s' — skipping", label_text)
+                continue
+            try:
+                await inp.fill(value)
+                filled[label_text] = value
+                logger.info("Filled text field '%s' = '%s'", label_text, value)
+            except Exception as exc:
+                logger.debug("Failed to fill text field '%s': %s", label_text, exc)
+
+    # --- Select dropdowns --- try multiple selector strategies
+    selects = await _find_first_matching(page, sel.WIZARD_SELECT_SELECTORS)
+    if selects is not None:
+        count = await selects.count()
+        for i in range(count):
+            sel_el = selects.nth(i)
+            try:
+                if not await sel_el.is_visible():
+                    continue
+            except Exception:
+                continue
+
+            # Skip if dropdown already has a valid selection (not the placeholder)
+            try:
+                cur_val = await sel_el.input_value()
+                if cur_val and cur_val.strip() and cur_val != "Select an option":
+                    continue
+            except Exception:
+                pass
+
+            label_text = ""
+            # Strategy 1: aria-label
+            try:
+                aria = await sel_el.get_attribute("aria-label")
+                if aria:
+                    label_text = aria.strip().lower()
+            except Exception:
+                pass
+
+            # Strategy 2: associated <label>
+            if not label_text:
+                try:
+                    sel_id = await sel_el.get_attribute("id")
+                    if sel_id:
+                        label_el = page.locator(f"label[for='{sel_id}']")
+                        if await label_el.count() > 0:
+                            label_text = (await label_el.first.inner_text()).strip().lower()
+                except Exception:
+                    pass
+
+            # Strategy 3: parent section label
+            if not label_text:
+                for section_sel in sel.WIZARD_FORM_SECTION_SELECTORS:
+                    try:
+                        section = page.locator(section_sel).filter(has=sel_el)
+                        label_el = section.locator(sel.WIZARD_FORM_LABEL)
+                        if await label_el.count() > 0:
+                            label_text = (await label_el.first.inner_text()).strip().lower()
+                            if label_text:
+                                break
+                    except Exception:
+                        continue
+
+            desired_value = _lookup_answer(label_text)
+
+            # Try multiple strategies to select the right option
+            selected = False
+
+            # Strategy A: select by value if we have a specific answer
+            if desired_value:
+                try:
+                    await sel_el.select_option(value=desired_value)
+                    selected = True
+                except Exception:
+                    pass
+
+            # Strategy B: match option text containing our desired value
+            if not selected and desired_value:
+                try:
+                    options = await sel_el.locator("option").all()
+                    for opt in options:
+                        opt_text = (await opt.inner_text()).strip()
+                        opt_val = await opt.get_attribute("value")
+                        if opt_val and desired_value.lower() in opt_text.lower():
+                            await sel_el.select_option(value=opt_val)
+                            desired_value = opt_text
+                            selected = True
+                            break
+                except Exception:
+                    pass
+
+            # Strategy C: for email/phone dropdowns, select first non-placeholder
+            if not selected:
+                try:
+                    options = await sel_el.locator("option").all()
+                    for opt in options:
+                        val = await opt.get_attribute("value")
+                        text = (await opt.inner_text()).strip()
+                        # Skip empty/placeholder options
+                        if val and text and text.lower() not in ("select an option", "select", "--", ""):
+                            await sel_el.select_option(value=val)
+                            desired_value = text
+                            selected = True
+                            break
+                except Exception as exc:
+                    logger.debug("Failed to select option for '%s': %s", label_text, exc)
+
+            if selected:
+                filled[label_text] = desired_value
+                logger.info("Selected dropdown '%s' = '%s'", label_text, desired_value)
+
+    # --- Radio buttons / checkboxes (SDUI may use these) ---
+    try:
+        radios = page.locator("div[role='dialog'] input[type='radio'], form input[type='radio']")
+        radio_count = await radios.count()
+        if radio_count > 0:
+            # For each radio group, select the first option if none selected
+            seen_names: set[str] = set()
+            for i in range(radio_count):
+                radio = radios.nth(i)
+                try:
+                    name = await radio.get_attribute("name") or f"radio_{i}"
+                    if name not in seen_names:
+                        seen_names.add(name)
+                        is_checked = await radio.is_checked()
+                        if not is_checked:
+                            await radio.check()
+                            logger.debug("Checked first radio for group '%s'", name)
+                except Exception:
+                    continue
+    except Exception:
+        pass
 
     return filled
 
 
-async def detect_challenge(page: Page) -> bool:
+async def detect_challenge(page: PageOrFrame) -> bool:
     """Return True if a visible captcha, security challenge, or auth-wall is detected.
 
     Only flags *blocking* challenges — hidden/preloaded captcha iframes are ignored.

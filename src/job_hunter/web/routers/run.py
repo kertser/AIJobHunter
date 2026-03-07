@@ -210,6 +210,17 @@ async def run_apply(request: Request):
 
     params = _load_run_params(settings)
 
+    # Build form answers from user profile
+    profile_form_answers: dict[str, str] = {}
+    try:
+        from job_hunter.config.loader import load_user_profile
+        user_profile_path = settings.data_dir / "user_profile.yml"
+        if user_profile_path.exists():
+            user_profile = load_user_profile(user_profile_path)
+            profile_form_answers = user_profile.build_form_answers()
+    except Exception:
+        pass
+
     async def _run():
         from job_hunter.db.models import ApplicationAttempt, ApplicationResult, JobStatus
         from job_hunter.db.repo import get_jobs_by_status, make_session, save_attempt
@@ -230,6 +241,8 @@ async def run_apply(request: Request):
                     job_url=job_url, resume_path=params["resume_path"],
                     dry_run=params["dry_run"], headless=params["headless"],
                     slowmo_ms=params["slowmo_ms"], mock=params["mock"],
+                    cookies_path=params["cookies_path"],
+                    form_answers=profile_form_answers,
                 )
                 result_map = {"success": ApplicationResult.SUCCESS, "dry_run": ApplicationResult.DRY_RUN,
                               "failed": ApplicationResult.FAILED, "blocked": ApplicationResult.BLOCKED}

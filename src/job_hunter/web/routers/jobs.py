@@ -229,6 +229,18 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
 
     resume_path = settings.data_dir / "resume.pdf"
     resume_str = str(resume_path) if resume_path.exists() else "tests/fixtures/resume.txt"
+    cookies_path = str(settings.data_dir / "cookies.json")
+
+    # Build form answers from user profile
+    profile_form_answers: dict[str, str] = {}
+    try:
+        from job_hunter.config.loader import load_user_profile
+        user_profile_path = settings.data_dir / "user_profile.yml"
+        if user_profile_path.exists():
+            user_profile = load_user_profile(user_profile_path)
+            profile_form_answers = user_profile.build_form_answers()
+    except Exception:
+        pass
 
     async def _run():
         from job_hunter.linkedin.mock_site import MockLinkedInServer
@@ -243,6 +255,8 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
                 job_url=actual_url, resume_path=resume_str,
                 dry_run=dry_run, headless=headless,
                 slowmo_ms=slowmo_ms, mock=mock,
+                cookies_path=cookies_path,
+                form_answers=profile_form_answers,
             )
             sess = make_session(engine)
             result_map = {"success": ApplicationResult.SUCCESS, "dry_run": ApplicationResult.DRY_RUN,

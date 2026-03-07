@@ -117,12 +117,33 @@ JOB_DETAIL_COMPANY_SELECTORS = [
 JOB_DETAIL_COMPANY = "a.topcard__org-name-link"
 
 EASY_APPLY_BUTTON_SELECTORS = [
+    # SDUI / 2025-2026 — Easy Apply is often an <a> tag, not a <button>
+    "a[data-view-name='job-apply-button']",
+    "a[aria-label*='Easy Apply']",
+    "a[href*='openSDUIApplyFlow']",
+    # aria-label based (most reliable across redesigns)
+    "button[aria-label*='Easy Apply']",
+    "button[aria-label*='easy apply']",
+    "button[aria-label*='Easy apply']",
+    # Classic button selectors
     "button.jobs-apply-button",
     "button.jobs-apply-button--top-card",
-    "button[aria-label*='Easy Apply']",
     "button.jobs-s-apply",
-    # Fallback: any apply button
+    # SDUI / 2025-2026 redesign variants
+    "div[data-job-apply-button]",
+    "button[data-job-apply-button]",
+    ".jobs-apply-button--top-card",
+    ".jobs-s-apply",
+    # Any element with Easy Apply text content (data-control-name patterns)
+    "[data-control-name='jobdetails_topcard_inapply']",
+    "[data-control-name='apply_button']",
+    # Broader class-based matches
+    "button[class*='jobs-apply-button']",
+    "button[class*='apply-button']",
+    # Fallback: any button with 'apply' in class
     "button[class*='apply']",
+    # Fallback: any clickable element with 'Easy Apply' visible text
+    ".artdeco-button--icon-right[aria-label*='Apply']",
 ]
 EASY_APPLY_BUTTON = "button.jobs-apply-button"
 
@@ -130,18 +151,90 @@ EASY_APPLY_BUTTON = "button.jobs-apply-button"
 # Easy Apply wizard
 # -------------------------------------------------------------------------
 
+# The wizard may be a modal overlay OR a full-page SDUI flow depending on
+# LinkedIn version.  We try multiple selector patterns.
+
+WIZARD_MODAL_SELECTORS = [
+    "div.jobs-easy-apply-modal",
+    "div[data-testid='easy-apply-modal']",
+    "div.artdeco-modal[role='dialog']",
+    "div[role='dialog'][aria-label*='apply' i]",
+    "div[role='dialog'][aria-label*='Apply']",
+    "div[role='dialog']",
+]
 WIZARD_MODAL = "div.jobs-easy-apply-modal"
+
+# Next / Continue button — multiple possible labels
+WIZARD_NEXT_SELECTORS = [
+    "button[aria-label='Continue to next step']",
+    "button[aria-label*='Continue']",
+    "button[aria-label*='Next']",
+    "button[aria-label*='next']",
+    "button:has-text('Next')",
+    "button:has-text('Continue')",
+]
 WIZARD_NEXT = "button[aria-label='Continue to next step']"
+
+# Review button
+WIZARD_REVIEW_SELECTORS = [
+    "button[aria-label='Review your application']",
+    "button[aria-label*='Review']",
+    "button:has-text('Review')",
+]
 WIZARD_REVIEW = "button[aria-label='Review your application']"
+
+# Submit button
+WIZARD_SUBMIT_SELECTORS = [
+    "button[aria-label='Submit application']",
+    "button[aria-label*='Submit']",
+    "button:has-text('Submit application')",
+    "button:has-text('Submit')",
+]
 WIZARD_SUBMIT = "button[aria-label='Submit application']"
+
+WIZARD_CLOSE_SELECTORS = [
+    "button[aria-label='Dismiss']",
+    "button[aria-label='Close']",
+    "button[aria-label*='Dismiss']",
+    "button[aria-label*='Close']",
+]
 WIZARD_CLOSE = "button[aria-label='Dismiss']"
+
 WIZARD_RESUME_INPUT = "input[type='file']"
+
+# Form field selectors — prefer semantic matching over class-based
+WIZARD_TEXT_INPUT_SELECTORS = [
+    "div.jobs-easy-apply-form-section input[type='text']",
+    "div[role='dialog'] input[type='text']",
+    "form input[type='text']",
+    "input[type='text']",
+]
 WIZARD_TEXT_INPUT = "div.jobs-easy-apply-form-section input[type='text']"
+
+WIZARD_SELECT_SELECTORS = [
+    "div.jobs-easy-apply-form-section select",
+    "div[role='dialog'] select",
+    "form select",
+    "select",
+]
 WIZARD_SELECT = "div.jobs-easy-apply-form-section select"
+
+WIZARD_FORM_SECTION_SELECTORS = [
+    "div.jobs-easy-apply-form-section",
+    "div[role='dialog'] div.fb-dash-form-element",
+    "div[role='group']",
+    "fieldset",
+]
 WIZARD_FORM_SECTION = "div.jobs-easy-apply-form-section"
 WIZARD_FORM_LABEL = "label"
 
 # Success confirmation
+APPLY_CONFIRMATION_SELECTORS = [
+    "div.jobs-easy-apply-confirmation",
+    "div[data-testid='apply-confirmation']",
+    "div[role='dialog'] h2:has-text('application was sent')",
+    "div:has-text('Your application was sent')",
+]
 APPLY_CONFIRMATION = "div.jobs-easy-apply-confirmation"
 
 # Challenge / captcha detection

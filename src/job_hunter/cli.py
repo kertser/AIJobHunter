@@ -433,6 +433,17 @@ def apply(
     init_db(engine)
     session = make_session(engine)
 
+    # Build form answers from user profile
+    profile_form_answers: dict[str, str] = {}
+    try:
+        from job_hunter.config.loader import load_user_profile
+        user_profile_path = settings.data_dir / "user_profile.yml"
+        if user_profile_path.exists():
+            user_profile = load_user_profile(user_profile_path)
+            profile_form_answers = user_profile.build_form_answers()
+    except Exception:
+        pass
+
     queued_jobs = get_jobs_by_status(session, JobStatus.QUEUED)
     if not queued_jobs:
         rprint("[yellow]No queued jobs to apply to.[/yellow]")
@@ -474,6 +485,7 @@ def apply(
                     headless=settings.headless,
                     slowmo_ms=settings.slowmo_ms,
                     mock=settings.mock,
+                    form_answers=profile_form_answers,
                 )
             )
 
