@@ -537,3 +537,147 @@ class TestHealthCheck:
         assert data["db_ok"] is True
 
 
+# ---------------------------------------------------------------------------
+# Onboarding — PDF upload
+# ---------------------------------------------------------------------------
+
+
+class TestOnboardingUpload:
+    def test_upload_rejects_non_pdf(self, client: TestClient) -> None:
+        """POST with a non-PDF file should return 400."""
+        r = client.post(
+            "/api/onboarding/generate",
+            files={"resume": ("notes.txt", b"just text", "text/plain")},
+            data={"linkedin_url": ""},
+        )
+        assert r.status_code == 400
+        assert "PDF" in r.json()["error"]
+
+    def test_upload_starts_task_with_mock_pdf(self, client: TestClient) -> None:
+        """POST with a valid PDF-named file in mock mode should start the task."""
+        # Minimal PDF content (not a real PDF, but the endpoint only checks extension)
+        r = client.post(
+            "/api/onboarding/generate",
+            files={"resume": ("resume.pdf", b"%PDF-1.4 fake content", "application/pdf")},
+            data={"linkedin_url": ""},
+        )
+        assert r.status_code == 202
+        data = r.json()
+        assert data["started"] == "onboarding"
+
+    def test_upload_saves_resume_file(self, test_app, tmp_path: Path) -> None:
+        """The uploaded PDF should be saved to data_dir/resume.pdf."""
+        with TestClient(test_app) as c:
+            content = b"%PDF-1.4 test resume bytes"
+            c.post(
+                "/api/onboarding/generate",
+                files={"resume": ("my_cv.pdf", content, "application/pdf")},
+                data={"linkedin_url": ""},
+            )
+            saved = tmp_path / "resume.pdf"
+            assert saved.exists()
+            assert saved.read_bytes() == content
+
+    def test_upload_rejects_when_task_running(self, client: TestClient) -> None:
+        """If a task is already running, return 409."""
+        tm = client.app.state.task_manager
+        original_prop = type(tm).is_running
+        type(tm).is_running = property(lambda self: True)
+        try:
+            r = client.post(
+                "/api/onboarding/generate",
+                files={"resume": ("resume.pdf", b"%PDF-1.4", "application/pdf")},
+                data={"linkedin_url": ""},
+            )
+            assert r.status_code == 409
+        finally:
+            type(tm).is_running = original_prop
+
+
+# ---------------------------------------------------------------------------
+# Profiles — round-trip spoken/programming languages & industries
+# ---------------------------------------------------------------------------
+
+
+class TestProfileRoundTrip:
+    def test_user_profile_saves_spoken_and_programming_languages(self, client: TestClient) -> None:
+        """PUT /api/user-profile with spoken_languages and programming_languages
+        should round-trip correctly through GET."""
+        profile = {
+            "name": "Test User",
+            "title": "Dev",
+            "spoken_languages": ["English", "Hebrew"],
+            "programming_languages": ["Python", "SQL"],
+            "preferred_industries": ["AI/ML", "healthcare"],
+            "disliked_industries": ["gambling"],
+        }
+        r = client.put("/api/user-profile", json=profile)
+        assert r.status_code == 200
+
+        r2 = client.get("/api/user-profile")
+        assert r2.status_code == 200
+        up = r2.json()["user_profile"]
+        assert up["spoken_languages"] == ["English", "Hebrew"]
+        assert up["programming_languages"] == ["Python", "SQL"]
+        assert up["preferred_industries"] == ["AI/ML", "healthcare"]
+        assert up["disliked_industries"] == ["gambling"]
+
+    def test_profiles_page_renders_new_fields(self, client: TestClient) -> None:
+        """Profiles page should render spoken_languages, programming_languages,
+        preferred_industries, and disliked_industries input fields."""
+        # First save a profile with the new fields populated
+        client.put("/api/user-profile", json={
+            "name": "Jane",
+            "title": "Engineer",
+            "spoken_languages": ["English", "Russian"],
+            "programming_languages": ["Python", "Go"],
+            "preferred_industries": ["fintech"],
+            "disliked_industries": ["oil"],
+        })
+        r = client.get("/profiles")
+        assert r.status_code == 200
+        html = r.text
+        # Verify the new field names appear in the form
+        assert 'name="spoken_languages"' in html
+        assert 'name="programming_languages"' in html
+        assert 'name="preferred_industries"' in html
+        assert 'name="disliked_industries"' in html
+        # Verify the values are rendered
+        assert "English, Russian" in html
+        assert "Python, Go" in html
+        assert "fintech" in html
+        assert "oil" in html
+        # The deprecated 'languages' field should NOT appear
+        assert 'name="languages"' not in html
+
+    def test_user_profile_round_trip_preserves_all_fields(self, client: TestClient) -> None:
+        """Full save→load cycle should not lose any fields."""
+        full_profile = {
+            "name": "Alice Smith",
+            "first_name": "Alice",
+            "last_name": "Smith",
+            "email": "alice@example.com",
+            "phone": "555-1234",
+            "phone_country_code": "+1",
+            "title": "Senior Engineer",
+            "summary": "Experienced dev",
+            "skills": ["Python", "FastAPI", "Docker"],
+            "experience_years": 10,
+            "seniority_level": "Senior",
+            "desired_roles": ["Staff Engineer", "Principal Engineer"],
+            "preferred_locations": ["Remote", "NYC"],
+            "education": ["M.Sc. CS"],
+            "spoken_languages": ["English", "Spanish"],
+            "programming_languages": ["Python", "Rust", "SQL"],
+            "preferred_industries": ["AI/ML", "fintech"],
+            "disliked_industries": ["defence"],
+        }
+        r = client.put("/api/user-profile", json=full_profile)
+        assert r.status_code == 200
+
+        r2 = client.get("/api/user-profile")
+        up = r2.json()["user_profile"]
+        for key, expected in full_profile.items():
+            assert up[key] == expected, f"Field {key!r}: expected {expected!r}, got {up[key]!r}"
+
+
