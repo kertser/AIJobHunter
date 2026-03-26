@@ -24,6 +24,8 @@ and matches your skills against market demand.
   - [Step 5: Run for Real](#step-5-run-for-real)
   - [Step 6: Market Intelligence (Optional)](#step-6-market-intelligence-optional)
 - [Web GUI](#web-gui)
+- [Scheduling](#scheduling)
+- [Email Notifications](#email-notifications)
 - [Operating Modes](#operating-modes)
 - [CLI Reference](#cli-reference)
   - [Global Flags](#global-flags)
@@ -38,6 +40,7 @@ and matches your skills against market demand.
 - [Data Models](#data-models)
 - [Project Structure](#project-structure)
 - [Testing](#testing)
+- [Docker Deployment](#docker-deployment)
 - [Safety & Ethics](#safety--ethics)
 - [Development Roadmap](#development-roadmap)
 - [License](#license)
@@ -59,8 +62,12 @@ and matches your skills against market demand.
 | **Market Intelligence** | Technology trend analysis, role archetypes, candidate–role matching, gap analysis |
 | **Web GUI** | Full command & control dashboard (FastAPI + HTMX + Pico CSS) |
 | **Visual dashboard** | Donut chart, fit histogram, skill gap bars, activity timeline, market panel |
+| **Scheduled runs** | APScheduler cron-based automation with configurable days, time, and pipeline mode |
+| **Email notifications** | Pipeline summary emails via Resend API or SMTP (Gmail, Outlook, custom) |
 | **Resume review** | AI-powered gap analysis comparing your resume to target jobs |
 | **Daily reports** | Markdown + JSON summaries with stats, job tables, and market section |
+| **Docker support** | Dockerfile + docker-compose with health check, volume mount, auto-restart |
+| **Settings persistence** | Web UI settings saved to `.env` — survives restarts |
 | **Mock mode** | Full pipeline testable offline with HTML fixtures — no API keys needed |
 | **CLI** | `hunt` command with 10+ subcommands and global flags |
 | **`.env` support** | API keys and settings from `.env` file |
@@ -88,7 +95,7 @@ Verify the installation:
 
 ```bash
 uv run hunt --help
-uv run pytest -q          # 247 tests, all offline
+uv run pytest -q          # 305 tests, all offline
 ```
 
 ---
@@ -257,10 +264,85 @@ Open **http://localhost:8000** in your browser.
 | **Profiles** | `/profiles` | Edit user profile and search profiles (skills, keywords, thresholds) |
 | **Resume Review** | `/resume-review` | AI gap analysis — missing skills, improvement suggestions, quick wins |
 | **Reports** | `/reports` | Browse and view daily pipeline + market reports |
-| **Settings** | `/settings` | Toggle mock/dry-run/headless, adjust slow-mo, update API key, log level |
+| **Settings** | `/settings` | Toggle mock/dry-run/headless, configure email notifications, update API keys |
+| **Schedule** | `/schedule` | Cron-style automation — set time, days, pipeline mode, view run history |
 | **Setup** | `/onboarding` | Upload resume PDF + LinkedIn URL to generate profiles (first-run wizard) |
 
 **Live progress streaming:** Pipeline and market operations stream real-time progress via Server-Sent Events (SSE) — you see each step as it happens, with keepalive pings during long operations.
+
+---
+
+## Scheduling
+
+The built-in scheduler runs pipeline jobs automatically on a cron-like schedule. Configure it from the **Schedule** page in the web GUI or via `data/schedule.yml`.
+
+### Configuration
+
+| Setting | Default | Description |
+|---|---|---|
+| **Enabled** | off | Toggle the scheduler on/off |
+| **Time of day** | `09:00` | When to run (24 h format) |
+| **Days of week** | Mon–Fri | Which days to run |
+| **Pipeline mode** | `full` | `discover` / `discover_score` / `full` / `market` |
+| **Profile** | `default` | Which search profile to use |
+
+### How it works
+
+- The scheduler runs inside the web server process (APScheduler `AsyncIOScheduler`).
+- Only one task runs at a time — if a pipeline is already running, the scheduled trigger is skipped.
+- After each run, a summary is recorded in `data/schedule_history.yml` (capped at 100 entries).
+- If email notifications are enabled, a pipeline summary email is sent after each run.
+
+### `data/schedule.yml` example
+
+```yaml
+schedule:
+  enabled: true
+  time_of_day: '09:00'
+  days_of_week: [mon, tue, wed, thu, fri]
+  pipeline_mode: full
+  profile_name: default
+```
+
+---
+
+## Email Notifications
+
+Receive email summaries after each scheduled pipeline run. Two providers are supported:
+
+### Resend (recommended — simple)
+
+1. Sign up at [resend.com](https://resend.com) (free tier: 100 emails/day)
+2. Create an API key
+3. In **Settings** → **Email Notifications**, select **Resend**, paste the API key, enter your email
+
+That's it — no SMTP configuration needed.
+
+### SMTP (advanced)
+
+For Gmail, Outlook, or custom mail servers:
+
+| Provider | Host | Port | TLS | Notes |
+|---|---|---|---|---|
+| **Gmail** | `smtp.gmail.com` | 587 | ✅ | Requires an [App Password](https://myaccount.google.com/apppasswords) |
+| **Outlook** | `smtp.office365.com` | 587 | ✅ | |
+| **Local relay** | `localhost` | 25 | ❌ | Leave credentials blank |
+
+### Environment variables
+
+| Variable | Description |
+|---|---|
+| `JOBHUNTER_EMAIL_PROVIDER` | `resend` (default) or `smtp` |
+| `JOBHUNTER_RESEND_API_KEY` | Resend API key |
+| `JOBHUNTER_NOTIFICATION_EMAIL` | Recipient email address |
+| `JOBHUNTER_NOTIFICATIONS_ENABLED` | `true` / `false` |
+| `JOBHUNTER_SMTP_HOST` | SMTP server hostname |
+| `JOBHUNTER_SMTP_PORT` | SMTP port (default: 587) |
+| `JOBHUNTER_SMTP_USER` | SMTP username (optional for relays) |
+| `JOBHUNTER_SMTP_PASSWORD` | SMTP password |
+| `JOBHUNTER_SMTP_USE_TLS` | `true` / `false` |
+
+All settings can also be configured from the **Settings** page in the web GUI. Changes are persisted to `.env` automatically.
 
 ---
 
@@ -422,11 +504,23 @@ uv run hunt --real --dry-run serve
 | `JOBHUNTER_OPENAI_API_KEY` | For real use | `""` | OpenAI API key |
 | `JOBHUNTER_LLM_PROVIDER` | No | `"openai"` | LLM provider |
 | `JOBHUNTER_DATA_DIR` | No | `"data"` | Path to the data directory |
+| `JOBHUNTER_EMAIL_PROVIDER` | No | `"resend"` | Email provider: `resend` or `smtp` |
+| `JOBHUNTER_RESEND_API_KEY` | For Resend | `""` | Resend API key |
+| `JOBHUNTER_NOTIFICATION_EMAIL` | For email | `""` | Notification recipient email |
+| `JOBHUNTER_NOTIFICATIONS_ENABLED` | No | `false` | Enable email notifications |
+| `JOBHUNTER_SMTP_HOST` | For SMTP | `""` | SMTP server hostname |
+| `JOBHUNTER_SMTP_PORT` | No | `587` | SMTP port |
+| `JOBHUNTER_SMTP_USER` | No | `""` | SMTP username |
+| `JOBHUNTER_SMTP_PASSWORD` | For SMTP | `""` | SMTP password |
+| `JOBHUNTER_SMTP_USE_TLS` | No | `true` | Use TLS for SMTP |
 
 Create a `.env` file in the project root:
 
 ```bash
 JOBHUNTER_OPENAI_API_KEY=sk-proj-...
+JOBHUNTER_EMAIL_PROVIDER=resend
+JOBHUNTER_RESEND_API_KEY=re_...
+JOBHUNTER_NOTIFICATION_EMAIL=you@example.com
 ```
 
 The app reads `.env` on startup. Shell environment variables take precedence.
@@ -504,6 +598,8 @@ data/
 ├── user_profile.yml       ← your extracted profile
 ├── profiles.yml           ← search profiles
 ├── cookies.json           ← LinkedIn session cookies (after hunt login)
+├── schedule.yml           ← scheduler configuration (time, days, mode)
+├── schedule_history.yml   ← last 100 scheduled run records
 └── reports/               ← daily Markdown + JSON reports
 ```
 
@@ -573,6 +669,8 @@ Configurable via `--data-dir` or `JOBHUNTER_DATA_DIR`.
 ```
 AIJobHunter/
 ├── pyproject.toml                        # Dependencies & build config (hatchling)
+├── Dockerfile                            # Multi-stage Docker build
+├── docker-compose.yml                    # One-command container deployment
 ├── README.md
 ├── AGENTS.md                             # Detailed architecture & conventions
 ├── .env.example                          # Environment config template
@@ -581,8 +679,8 @@ AIJobHunter/
 │   ├── cli.py                            # Typer CLI — all commands + market sub-app
 │   │
 │   ├── config/
-│   │   ├── models.py                     # AppSettings, SearchProfile, UserProfile
-│   │   └── loader.py                     # YAML load/save + settings factory
+│   │   ├── models.py                     # AppSettings, SearchProfile, UserProfile, ScheduleConfig
+│   │   └── loader.py                     # YAML load/save, settings factory, .env persistence
 │   │
 │   ├── db/
 │   │   ├── models.py                     # ORM: Job, Score, ApplicationAttempt
@@ -615,6 +713,12 @@ AIJobHunter/
 │   │
 │   ├── reporting/
 │   │   └── report.py                     # Markdown + JSON reports (+ market section)
+│   │
+│   ├── notifications/
+│   │   └── email.py                      # Email providers: Resend, SMTP, Fake
+│   │
+│   ├── scheduling/
+│   │   └── scheduler.py                  # APScheduler cron automation + history
 │   │
 │   ├── market/                           # Market Intelligence package
 │   │   ├── pipeline.py                   # Full 7-step market pipeline
@@ -656,7 +760,8 @@ AIJobHunter/
 │   │   │   ├── resume_review.py          # AI resume gap analysis
 │   │   │   ├── run.py                    # Pipeline + market trigger + SSE progress
 │   │   │   ├── reports.py                # Daily report viewer
-│   │   │   └── settings.py               # Runtime settings
+│   │   │   ├── settings.py               # Runtime settings + .env persistence
+│   │   │   └── schedule.py               # Scheduler config + run history
 │   │   ├── templates/                    # Jinja2 HTML templates
 │   │   └── static/                       # Banner, favicon
 │   │
@@ -666,9 +771,11 @@ AIJobHunter/
 │       ├── retry.py                      # Exponential back-off decorator
 │       └── hashing.py                    # SHA-256 job dedup
 │
-├── tests/                                # 247 tests — all run fully offline
-│   ├── test_web.py                       # Web GUI endpoints
+├── tests/                                # 305 tests — all run fully offline
+│   ├── test_web.py                       # Web GUI endpoints (incl. schedule, settings, email)
 │   ├── test_market.py                    # Market Intelligence (all stages)
+│   ├── test_notifications.py             # Email providers + pipeline summary
+│   ├── test_scheduling.py                # Scheduler config, YAML, start/stop/reschedule
 │   ├── test_apply_mock_flow.py           # Easy Apply wizard
 │   ├── test_discover_parse_mock.py       # Discovery & parsing
 │   ├── test_matching_scoring.py          # Scoring logic
@@ -699,7 +806,7 @@ uv run pytest tests/test_market.py  # Market Intelligence tests
 uv run pytest -k "test_upsert"     # Pattern matching
 ```
 
-**Current:** 247 tests passed.
+**Current:** 305 tests passed.
 
 Tests use fake implementations for all external services:
 - `FakeEmbedder` — fixed similarity scores
@@ -708,8 +815,40 @@ Tests use fake implementations for all external services:
 - `FakeMarketExtractor` — deterministic signal extraction
 - `FakeTitleNormalizer` — deterministic title cleaning
 - `FakeDialogueEvaluator` — deterministic session scores
+- `FakeNotifier` — records emails instead of sending
 
 All database tests use in-memory SQLite. Mock discovery tests spin up a local HTTP server with HTML fixtures.
+
+---
+
+## Docker Deployment
+
+Run the web GUI in a Docker container:
+
+```bash
+# Build and start
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
+```
+
+The container:
+- Exposes port **8000** (web GUI)
+- Mounts `./data` as a volume for persistent storage
+- Reads configuration from `.env`
+- Runs a health check every 30 s at `/api/health`
+- Restarts automatically (`unless-stopped`)
+
+### Custom build
+
+```bash
+docker build -t ai-job-hunter .
+docker run -d -p 8000:8000 -v ./data:/app/data --env-file .env ai-job-hunter
+```
 
 ---
 
@@ -742,7 +881,8 @@ All database tests use in-memory SQLite. Mock discovery tests spin up a local HT
 | **13** | Market Intelligence — candidate model, matching, scoring | ✅ |
 | **14** | Market Intelligence — UI panels, reporting, evaluation | ✅ |
 | **15** | Operational integration — pipeline, SSE, title normalisation | ✅ |
-| **Next** | Outcome learning, scheduled pipelines, notifications | 🔜 |
+| **16** | Scheduled pipelines, email notifications (Resend + SMTP), Docker | ✅ |
+| **Next** | Outcome learning, career trajectory parsing, fairness-aware reranking | 🔜 |
 
 ---
 

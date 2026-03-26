@@ -4,6 +4,7 @@
 <h2>Settings</h2>
 
 <form id="settings-form">
+  <h3>🔧 Runtime</h3>
   <div class="grid">
     <label>
       <input type="checkbox" name="mock" role="switch" {% if settings.mock %}checked{% endif %}>
@@ -46,31 +47,183 @@
     <small>Cannot be changed at runtime.</small>
   </label>
 
-  <button type="submit">Save Settings</button>
+  <hr style="margin: 1.5rem 0;">
+
+  <!-- ═══ Email Notifications ═══ -->
+  <h3>📧 Email Notifications</h3>
+  <p style="color: var(--pico-muted-color); font-size: 0.85rem; margin-top: 0;">
+    Receive email summaries after each scheduled pipeline run.
+  </p>
+
+  <label>
+    <input type="checkbox" name="notifications_enabled" role="switch"
+           {% if settings.notifications_enabled %}checked{% endif %}>
+    Enable Email Notifications
+  </label>
+
+  <label>
+    Notification Recipient
+    <input type="email" name="notification_email" value="{{ settings.notification_email }}" placeholder="you@example.com">
+  </label>
+
+  <!-- Provider selector -->
+  <fieldset style="margin-top: 0.5rem;">
+    <legend style="font-weight: 600; font-size: 0.88rem;">Email Provider</legend>
+    <div style="display: flex; gap: 1.5rem; margin-bottom: 0.8rem;">
+      <label style="display: flex; align-items: center; gap: 0.3rem; font-size: 0.88rem;">
+        <input type="radio" name="email_provider" value="resend"
+               {% if settings.email_provider == 'resend' %}checked{% endif %}
+               onchange="toggleProvider()">
+        ✉️ Resend <small style="color: var(--pico-muted-color);">(simple — just an API key)</small>
+      </label>
+      <label style="display: flex; align-items: center; gap: 0.3rem; font-size: 0.88rem;">
+        <input type="radio" name="email_provider" value="smtp"
+               {% if settings.email_provider == 'smtp' %}checked{% endif %}
+               onchange="toggleProvider()">
+        🔧 SMTP <small style="color: var(--pico-muted-color);">(Gmail, Outlook, custom server)</small>
+      </label>
+    </div>
+  </fieldset>
+
+  <!-- ── Resend panel ── -->
+  <div id="provider-resend" style="{% if settings.email_provider != 'resend' %}display:none{% endif %}">
+    <div style="padding: 0.8rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px; margin-bottom: 1rem; font-size: 0.84rem; line-height: 1.6;">
+      <strong>Resend</strong> is a free email API — no SMTP setup needed.<br>
+      1. Sign up at <a href="https://resend.com" target="_blank" rel="noopener">resend.com</a> (free: 100 emails/day)<br>
+      2. Create an API key and paste it below.
+    </div>
+    <label>
+      Resend API Key
+      <input type="password" name="resend_api_key" placeholder="{{ resend_api_key_masked }}">
+      <small>Current: {{ resend_api_key_masked }}</small>
+    </label>
+  </div>
+
+  <!-- ── SMTP panel ── -->
+  <div id="provider-smtp" style="{% if settings.email_provider != 'smtp' %}display:none{% endif %}">
+    <details style="margin-bottom: 1rem; font-size: 0.84rem;">
+      <summary style="cursor: pointer; font-weight: 600; color: var(--pico-primary);">ℹ️ SMTP setup guide</summary>
+      <div style="margin-top: 0.5rem; padding: 0.8rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px; line-height: 1.6;">
+        <p><strong>Gmail</strong> — Host: <code>smtp.gmail.com</code>, Port: <code>587</code>, TLS: on.
+          Requires an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a>.</p>
+        <p><strong>Outlook</strong> — Host: <code>smtp.office365.com</code>, Port: <code>587</code>, TLS: on.</p>
+        <p><strong>Local relay</strong> — Host: <code>localhost</code>, Port: <code>25</code>, TLS: off. Leave credentials blank.</p>
+      </div>
+    </details>
+
+    <div class="grid">
+      <label>
+        SMTP Host
+        <input type="text" name="smtp_host" value="{{ settings.smtp_host }}" placeholder="smtp.gmail.com">
+      </label>
+      <label>
+        SMTP Port
+        <input type="number" name="smtp_port" value="{{ settings.smtp_port }}" placeholder="587">
+      </label>
+      <label>
+        <input type="checkbox" name="smtp_use_tls" role="switch"
+               {% if settings.smtp_use_tls %}checked{% endif %}>
+        Use TLS
+      </label>
+    </div>
+
+    <div class="grid">
+      <label>
+        SMTP Username
+        <input type="text" name="smtp_user" value="{{ settings.smtp_user }}" placeholder="you@gmail.com">
+        <small>Optional — leave blank for unauthenticated relays.</small>
+      </label>
+      <label>
+        SMTP Password
+        <input type="password" name="smtp_password" placeholder="{{ smtp_password_masked }}">
+        <small>Optional — for Gmail use an <a href="https://myaccount.google.com/apppasswords" target="_blank">App Password</a>.</small>
+      </label>
+    </div>
+  </div>
+
+  <div style="display: flex; gap: 0.8rem; margin-top: 1rem; flex-wrap: wrap;">
+    <button type="submit">💾 Save Settings</button>
+    <button type="button" onclick="sendTestEmail()" class="secondary" id="test-email-btn">📧 Send Test Email</button>
+  </div>
 </form>
 
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+  function toggleProvider() {
+    var provider = document.querySelector('input[name="email_provider"]:checked').value;
+    document.getElementById('provider-resend').style.display = provider === 'resend' ? '' : 'none';
+    document.getElementById('provider-smtp').style.display = provider === 'smtp' ? '' : 'none';
+  }
+
   document.getElementById('settings-form').addEventListener('submit', function(e) {
     e.preventDefault();
-    const fd = new FormData(this);
-    const body = {
+    var body = _collectSettingsBody();
+
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    }).then(function(r) { return r.json(); }).then(function() {
+      showToast('Settings saved!');
+    });
+  });
+
+  function _collectSettingsBody() {
+    var fd = new FormData(document.getElementById('settings-form'));
+    var body = {
       mock: fd.has('mock'),
       dry_run: fd.has('dry_run'),
       headless: fd.has('headless'),
       slowmo_ms: parseInt(fd.get('slowmo_ms')) || 0,
       log_level: fd.get('log_level'),
+      email_provider: fd.get('email_provider') || 'resend',
+      smtp_host: fd.get('smtp_host') || '',
+      smtp_port: parseInt(fd.get('smtp_port')) || 587,
+      smtp_use_tls: fd.has('smtp_use_tls'),
+      smtp_user: fd.get('smtp_user') || '',
+      notification_email: fd.get('notification_email') || '',
+      notifications_enabled: fd.has('notifications_enabled'),
     };
-    const key = fd.get('openai_api_key');
+    var key = fd.get('openai_api_key');
     if (key && key.trim()) body.openai_api_key = key.trim();
+    var smtpPw = fd.get('smtp_password');
+    if (smtpPw && smtpPw.trim()) body.smtp_password = smtpPw.trim();
+    var resendKey = fd.get('resend_api_key');
+    if (resendKey && resendKey.trim()) body.resend_api_key = resendKey.trim();
+    return body;
+  }
+
+  function sendTestEmail() {
+    var btn = document.getElementById('test-email-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Saving & sending…';
+
+    var body = _collectSettingsBody();
     fetch('/api/settings', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
-    }).then(r => r.json()).then(() => showToast('Settings saved!'));
-  });
+    })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+      return fetch('/api/settings/test-email', { method: 'POST' });
+    })
+    .then(function(r) {
+      return r.json().then(function(data) {
+        if (r.ok) {
+          showToast('✅ Test email sent successfully!');
+        } else {
+          showToast('❌ ' + (data.error || 'Failed to send'));
+        }
+      });
+    })
+    .catch(function(err) { showToast('Error: ' + err); })
+    .finally(function() {
+      btn.disabled = false;
+      btn.textContent = '📧 Send Test Email';
+    });
+  }
 </script>
 {% endblock %}
-

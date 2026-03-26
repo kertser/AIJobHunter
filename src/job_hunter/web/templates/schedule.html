@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Schedule — AI Job Hunter{% endblock %}
+{% block content %}
+<h2>🕐 Automation Schedule</h2>
+<p style="color: var(--pico-muted-color); margin-bottom: 1.2rem; font-size: 0.88rem;">
+  Configure automated daily pipeline runs. The scheduler runs inside the web server process.
+</p>
+
+<form id="schedule-form">
+  <div class="grid">
+    <label>
+      <input type="checkbox" name="enabled" role="switch" {% if config.enabled %}checked{% endif %}>
+      <strong>Enable Scheduler</strong>
+    </label>
+  </div>
+
+  <div class="grid">
+    <label>
+      Time of Day
+      <input type="time" name="time_of_day" value="{{ config.time_of_day }}">
+    </label>
+    <label>
+      Pipeline Mode
+      <select name="pipeline_mode">
+        <option value="discover" {% if config.pipeline_mode.value == 'discover' %}selected{% endif %}>🔍 Discover only</option>
+        <option value="discover_score" {% if config.pipeline_mode.value == 'discover_score' %}selected{% endif %}>🎯 Discover + Score</option>
+        <option value="full" {% if config.pipeline_mode.value == 'full' %}selected{% endif %}>🚀 Full Pipeline</option>
+        <option value="market" {% if config.pipeline_mode.value == 'market' %}selected{% endif %}>📊 Market Analysis</option>
+      </select>
+    </label>
+    <label>
+      Profile Name
+      <input type="text" name="profile_name" value="{{ config.profile_name }}" placeholder="default">
+    </label>
+  </div>
+
+  <fieldset>
+    <legend>Days of Week</legend>
+    <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+      {% set days = [('mon', 'Monday'), ('tue', 'Tuesday'), ('wed', 'Wednesday'), ('thu', 'Thursday'), ('fri', 'Friday'), ('sat', 'Saturday'), ('sun', 'Sunday')] %}
+      {% for val, label in days %}
+      <label style="display: flex; align-items: center; gap: 0.3rem; font-size: 0.88rem;">
+        <input type="checkbox" name="days_of_week" value="{{ val }}"
+               {% if val in config.days_of_week %}checked{% endif %}>
+        {{ label }}
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+
+  <div style="display: flex; gap: 0.8rem; margin-top: 1rem; flex-wrap: wrap;">
+    <button type="submit">💾 Save Schedule</button>
+    <button type="button" onclick="triggerNow()" class="secondary">▶ Run Now</button>
+  </div>
+</form>
+
+<!-- ═══ Status ═══ -->
+<div style="margin-top: 1.5rem; padding: 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 10px; background: var(--pico-card-background-color);">
+  <h4 style="margin: 0 0 0.5rem;">📋 Status</h4>
+  <div style="display: flex; gap: 2rem; flex-wrap: wrap; font-size: 0.88rem;">
+    <div>
+      <strong>Scheduler:</strong>
+      {% if config.enabled %}
+      <span style="color: #22c55e; font-weight: 600;">● Active</span>
+      {% else %}
+      <span style="color: #94a3b8;">● Disabled</span>
+      {% endif %}
+    </div>
+    <div>
+      <strong>Next Run:</strong>
+      <span id="next-run">{{ next_run or '—' }}</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Run History ═══ -->
+{% if history %}
+<div style="margin-top: 1.5rem;">
+  <h3>📜 Run History</h3>
+  <table>
+    <thead>
+      <tr><th>Started</th><th>Mode</th><th>Result</th><th>Error</th></tr>
+    </thead>
+    <tbody>
+      {% for r in history %}
+      <tr>
+        <td style="font-size: 0.82rem;">{{ r.started_at[:19] }}</td>
+        <td><span class="status-badge status-scored">{{ r.mode }}</span></td>
+        <td style="font-size: 0.82rem;">
+          {% if r.summary %}
+          {% for k, v in r.summary.items() if k != 'error' %}
+          <span>{{ k }}={{ v }}</span>{% if not loop.last %}, {% endif %}
+          {% endfor %}
+          {% else %}—{% endif %}
+        </td>
+        <td style="font-size: 0.82rem; color: #ef4444;">{{ r.error or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.getElementById('schedule-form').addEventListener('submit', function(e) {
+  e.preventDefault();
+  var fd = new FormData(this);
+  var days = [];
+  fd.getAll('days_of_week').forEach(function(d) { days.push(d); });
+
+  var body = {
+    enabled: fd.has('enabled'),
+    time_of_day: fd.get('time_of_day') || '09:00',
+    days_of_week: days,
+    pipeline_mode: fd.get('pipeline_mode'),
+    profile_name: fd.get('profile_name') || 'default',
+  };
+
+  fetch('/api/schedule', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    showToast('Schedule saved!');
+    document.getElementById('next-run').textContent = data.next_run || '—';
+  }).catch(function(err) {
+    showToast('Error: ' + err);
+  });
+});
+
+function triggerNow() {
+  fetch('/api/schedule/trigger', { method: 'POST' })
+    .then(function(r) {
+      if (r.ok || r.status === 202) {
+        showToast('Scheduled run triggered! Check Pipeline page for progress.');
+      } else {
+        return r.json().then(function(d) { showToast('Error: ' + (d.error || 'failed')); });
+      }
+    })
+    .catch(function(err) { showToast('Error: ' + err); });
+}
+</script>
+{% endblock %}
+

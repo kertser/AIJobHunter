@@ -37,6 +37,18 @@ class AppSettings(BaseSettings):
     slowmo_ms: int = 0
     log_level: LogLevel = LogLevel.INFO
 
+    # SMTP email notification settings
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    notification_email: str = ""
+    notifications_enabled: bool = False
+    # Email provider: "resend" or "smtp"
+    email_provider: str = "resend"
+    resend_api_key: str = ""
+
 
 class SearchProfile(BaseModel):
     """A single job-search profile loaded from YAML."""
@@ -159,5 +171,35 @@ class UserProfile(BaseModel):
             answers["city"] = self.preferred_locations[0]
             answers["location"] = self.preferred_locations[0]
         return answers
+
+
+class PipelineMode(str, enum.Enum):
+    """Pipeline modes for scheduled runs."""
+    DISCOVER = "discover"
+    DISCOVER_SCORE = "discover_score"
+    FULL = "full"
+    MARKET = "market"
+
+
+class ScheduleConfig(BaseModel):
+    """Persistent schedule configuration stored in schedule.yml."""
+
+    enabled: bool = False
+    time_of_day: str = "09:00"
+    days_of_week: list[str] = Field(
+        default_factory=lambda: ["mon", "tue", "wed", "thu", "fri"],
+    )
+    pipeline_mode: PipelineMode = PipelineMode.FULL
+    profile_name: str = "default"
+
+
+class ScheduleRunRecord(BaseModel):
+    """A single record of a scheduled pipeline run."""
+
+    started_at: str = ""
+    completed_at: str = ""
+    mode: str = ""
+    summary: dict = Field(default_factory=dict)
+    error: str = ""
 
 

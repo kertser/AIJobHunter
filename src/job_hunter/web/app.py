@@ -40,6 +40,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         else:
             owns_engine = False
         app.state.settings = settings
+        # Resolve the .env path for settings persistence
+        if not hasattr(app.state, "dotenv_path") or app.state.dotenv_path is None:
+            app.state.dotenv_path = Path(".env").resolve()
         if not hasattr(app.state, "task_manager") or app.state.task_manager is None:
             app.state.task_manager = TaskManager()
         app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -76,8 +79,27 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
         app.state.templates.env.filters["datefmt"] = _datefmt
 
+        # Start scheduler if enabled
+        scheduler = None
+        try:
+            from job_hunter.config.loader import load_schedule
+            from job_hunter.scheduling.scheduler import PipelineScheduler
+
+            schedule_config = load_schedule(settings.data_dir / "schedule.yml")
+            scheduler = PipelineScheduler()
+            scheduler.wire(app.state)
+            scheduler.start(schedule_config)
+        except Exception:
+            pass  # Degrade gracefully in tests or if APScheduler not available
+        app.state.scheduler = scheduler
+
         yield
         # Shutdown
+        if scheduler:
+            try:
+                scheduler.stop()
+            except Exception:
+                pass
         if owns_engine:
             app.state.engine.dispose()
 
@@ -92,7 +114,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # Import and include routers
-    from job_hunter.web.routers import dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings as settings_router
+    from job_hunter.web.routers import dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings as settings_router, schedule
     from job_hunter.market.web.router import router as market_router
 
     @app.get("/favicon.ico", include_in_schema=False)
@@ -102,6 +124,27 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             return FileResponse(str(ico_path), media_type="image/x-icon")
         return Response(status_code=204)
 
+    @app.get("/api/health")
+    async def health():
+        """Health check endpoint for Docker / monitoring."""
+        scheduler_ok = False
+        try:
+            sched = getattr(app.state, "scheduler", None)
+            scheduler_ok = sched is not None and sched.running
+        except Exception:
+            pass
+        db_ok = False
+        try:
+            from sqlalchemy import text
+            from job_hunter.db.repo import make_session
+            session = make_session(app.state.engine)
+            session.execute(text("SELECT 1"))
+            session.close()
+            db_ok = True
+        except Exception:
+            pass
+        return {"status": "ok", "db_ok": db_ok, "scheduler_running": scheduler_ok}
+
     app.include_router(dashboard.router)
     app.include_router(onboarding.router)
     app.include_router(jobs.router)
@@ -110,6 +153,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.include_router(reports.router)
     app.include_router(resume_review.router)
     app.include_router(settings_router.router)
+    app.include_router(schedule.router)
     app.include_router(market_router)
 
     return app

@@ -1,0 +1,21 @@
+services:
+  jobhunter:
+    build: .
+    container_name: ai-job-hunter
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - JOBHUNTER_DATA_DIR=/app/data
+      - JOBHUNTER_HEADLESS=true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+

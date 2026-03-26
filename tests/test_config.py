@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from job_hunter.config.loader import load_profiles, load_settings
+from job_hunter.config.loader import load_profiles, load_settings, save_settings_env
 from job_hunter.config.models import AppSettings, LogLevel, SearchProfile
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -66,4 +66,49 @@ class TestLoadSettings:
         settings = load_settings(mock=None, dry_run=None)
         assert settings.mock is False
         assert settings.dry_run is False
+
+
+class TestSaveSettingsEnv:
+    def test_creates_env_file(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        settings = AppSettings(resend_api_key="re_test_123", notification_email="a@b.com")
+        save_settings_env(settings, env_path)
+        content = env_path.read_text()
+        assert "JOBHUNTER_RESEND_API_KEY='re_test_123'" in content
+        assert "JOBHUNTER_NOTIFICATION_EMAIL='a@b.com'" in content
+
+    def test_preserves_existing_comments(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        env_path.write_text("# My comment\nJOBHUNTER_MOCK='false'\n")
+        settings = AppSettings(mock=True)
+        save_settings_env(settings, env_path)
+        content = env_path.read_text()
+        assert "# My comment" in content
+        assert "JOBHUNTER_MOCK='true'" in content
+
+    def test_round_trip_resend_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        env_path = tmp_path / ".env"
+        settings = AppSettings(resend_api_key="re_live_abc123", email_provider="resend")
+        save_settings_env(settings, env_path)
+        # Clear any real env var so .env file is the source of truth
+        monkeypatch.delenv("JOBHUNTER_RESEND_API_KEY", raising=False)
+        monkeypatch.delenv("JOBHUNTER_EMAIL_PROVIDER", raising=False)
+        loaded = AppSettings(_env_file=str(env_path))
+        assert loaded.resend_api_key == "re_live_abc123"
+        assert loaded.email_provider == "resend"
+
+    def test_enum_persisted_as_string(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        settings = AppSettings(log_level=LogLevel.DEBUG)
+        save_settings_env(settings, env_path)
+        content = env_path.read_text()
+        assert "JOBHUNTER_LOG_LEVEL='DEBUG'" in content
+
+    def test_bool_persisted_as_lowercase(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        settings = AppSettings(notifications_enabled=True, smtp_use_tls=False)
+        save_settings_env(settings, env_path)
+        content = env_path.read_text()
+        assert "JOBHUNTER_NOTIFICATIONS_ENABLED='true'" in content
+        assert "JOBHUNTER_SMTP_USE_TLS='false'" in content
 

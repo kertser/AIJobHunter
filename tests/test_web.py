@@ -27,6 +27,8 @@ def test_app(tmp_path: Path):
     engine = get_memory_engine()
     init_db(engine)
     app.state.engine = engine
+    # Point .env persistence to tmp dir so tests don't pollute the real .env
+    app.state.dotenv_path = tmp_path / ".env"
 
     # Seed sample data
     session = make_session(engine)
@@ -389,3 +391,144 @@ class TestMarketIntegration:
         assert r.status_code == 200
         data = r.json()
         assert "market" in data
+
+
+# ---------------------------------------------------------------------------
+# Schedule routes
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleRoutes:
+    def test_schedule_page_loads(self, client: TestClient) -> None:
+        r = client.get("/schedule")
+        assert r.status_code == 200
+        assert "Schedule" in r.text
+
+    def test_schedule_api_get(self, client: TestClient) -> None:
+        r = client.get("/api/schedule")
+        assert r.status_code == 200
+        data = r.json()
+        assert "config" in data
+        assert "next_run" in data
+        assert "history" in data
+        assert isinstance(data["config"], dict)
+        assert "enabled" in data["config"]
+
+    def test_schedule_api_update(self, client: TestClient) -> None:
+        r = client.put("/api/schedule", json={
+            "enabled": True,
+            "time_of_day": "10:30",
+            "days_of_week": ["mon", "wed", "fri"],
+            "pipeline_mode": "market",
+            "profile_name": "my_profile",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["updated"] is True
+
+    def test_schedule_api_update_defaults(self, client: TestClient) -> None:
+        r = client.put("/api/schedule", json={
+            "enabled": False,
+            "time_of_day": "09:00",
+            "days_of_week": [],
+            "pipeline_mode": "full",
+            "profile_name": "default",
+        })
+        assert r.status_code == 200
+        assert r.json()["updated"] is True
+
+    def test_schedule_trigger_disabled(self, client: TestClient) -> None:
+        """Trigger should fail when schedule is disabled (default)."""
+        r = client.post("/api/schedule/trigger")
+        # Default schedule is disabled → 400 or 503
+        assert r.status_code in (400, 503)
+
+    def test_schedule_trigger_task_running(self, client: TestClient) -> None:
+        """Trigger should return 409 if a task is already running."""
+        # First enable the schedule so we don't get 400/503 for disabled
+        client.put("/api/schedule", json={
+            "enabled": True,
+            "time_of_day": "09:00",
+            "days_of_week": ["mon"],
+            "pipeline_mode": "full",
+            "profile_name": "default",
+        })
+        # Monkey-patch is_running to simulate a running task
+        import job_hunter.web.task_manager as tm_mod
+        tm = client.app.state.task_manager
+        original_prop = type(tm).is_running
+        type(tm).is_running = property(lambda self: True)
+        try:
+            r = client.post("/api/schedule/trigger")
+            assert r.status_code == 409
+        finally:
+            type(tm).is_running = original_prop
+
+
+# ---------------------------------------------------------------------------
+# Settings — email notification fields
+# ---------------------------------------------------------------------------
+
+
+class TestSettingsEmail:
+    def test_settings_page_has_email_section(self, client: TestClient) -> None:
+        r = client.get("/settings")
+        assert r.status_code == 200
+        assert "Email Notifications" in r.text
+        assert "smtp_host" in r.text.lower() or "SMTP Host" in r.text
+
+    def test_settings_api_includes_email_fields(self, client: TestClient) -> None:
+        r = client.get("/api/settings")
+        assert r.status_code == 200
+        data = r.json()
+        assert "smtp_host" in data
+        assert "smtp_port" in data
+        assert "notification_email" in data
+        assert "notifications_enabled" in data
+
+    def test_settings_update_email(self, client: TestClient) -> None:
+        r = client.put("/api/settings", json={
+            "smtp_host": "smtp.test.com",
+            "smtp_port": 465,
+            "smtp_user": "user@test.com",
+            "notification_email": "dest@test.com",
+            "notifications_enabled": True,
+        })
+        assert r.status_code == 200
+        # Verify
+        r2 = client.get("/api/settings")
+        data = r2.json()
+        assert data["smtp_host"] == "smtp.test.com"
+        assert data["smtp_port"] == 465
+        assert data["notification_email"] == "dest@test.com"
+        assert data["notifications_enabled"] is True
+
+    def test_test_email_fails_without_config(self, client: TestClient) -> None:
+        """Test email endpoint should fail when nothing is configured."""
+        r = client.post("/api/settings/test-email")
+        assert r.status_code == 400
+        error = r.json().get("error", "")
+        assert "email" in error.lower() or "configured" in error.lower()
+
+    def test_settings_api_includes_resend_fields(self, client: TestClient) -> None:
+        r = client.get("/api/settings")
+        data = r.json()
+        assert "email_provider" in data
+        assert "resend_api_key" in data
+
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+
+class TestHealthCheck:
+    def test_health_endpoint(self, client: TestClient) -> None:
+        r = client.get("/api/health")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "ok"
+        assert "db_ok" in data
+        assert data["db_ok"] is True
+
+
