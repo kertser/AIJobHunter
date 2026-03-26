@@ -1433,7 +1433,7 @@ class TestMarketRunWeb:
         """The run page should show the Market Analysis card."""
         r = run_client.get("/run")
         assert r.status_code == 200
-        assert "Market Analysis" in r.text
+        assert "Market Intelligence" in r.text
         assert "Analyse Market" in r.text
 
 

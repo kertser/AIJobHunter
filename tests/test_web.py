@@ -249,7 +249,7 @@ class TestRunControls:
     def test_run_page_loads(self, client: TestClient) -> None:
         r = client.get("/run")
         assert r.status_code == 200
-        assert "Run Controls" in r.text
+        assert "Pipeline Controls" in r.text
 
     def test_task_status_api(self, client: TestClient) -> None:
         r = client.get("/api/run/task-status")

@@ -1,75 +1,128 @@
 {% extends "base.html" %}
 {% block title %}Market Intelligence — AI Job Hunter{% endblock %}
+{% block extra_head %}
+<style>
+  .market-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.8rem; margin-bottom: 1.5rem; }
+  .market-stat {
+    border: 1px solid var(--pico-muted-border-color); border-radius: 10px;
+    padding: 0.8rem 1rem; text-align: center; border-top: 3px solid #6366f1;
+  }
+  .market-stat .ms-num { font-size: 1.6rem; font-weight: 800; color: #6366f1; margin: 0; line-height: 1.1; }
+  .market-stat .ms-lbl { font-size: 0.72rem; color: var(--pico-muted-color); text-transform: uppercase; letter-spacing: 0.5px; }
+  @media (max-width: 640px) { .market-stats { grid-template-columns: repeat(2, 1fr); } }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; margin-bottom: 1.5rem; }
+  @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+
+  .panel {
+    border: 1px solid var(--pico-muted-border-color); border-radius: 10px;
+    padding: 1.2rem; background: var(--pico-card-background-color);
+  }
+  .panel h4 { margin: 0 0 0.8rem; }
+
+  /* Horizontal bar chart */
+  .hbar-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; font-size: 0.8rem; }
+  .hbar-name { width: 110px; text-align: right; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .hbar-track { flex: 1; height: 18px; background: #f1f5f9; border-radius: 4px; overflow: hidden; }
+  .hbar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; min-width: 2px; }
+  .hbar-val { width: 28px; font-weight: 600; font-size: 0.78rem; }
+
+  /* Momentum badge */
+  .mom-up { color: #16a34a; font-weight: 700; }
+  .mom-down { color: #dc2626; font-weight: 700; }
+  .mom-flat { color: #94a3b8; }
+
+  /* Company detail panel */
+  .company-detail {
+    display: none; padding: 0.8rem 1rem; margin-top: 0.3rem;
+    background: #f8fafc; border-radius: 8px; border-left: 3px solid #6366f1;
+    font-size: 0.82rem; animation: fadeIn 0.2s ease;
+  }
+  .company-detail.open { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  .company-detail .cd-skills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 0.3rem; }
+  .company-detail .cd-skills kbd { font-size: 0.7rem; background: #e0e7ff; color: #4338ca; }
+  .company-detail .cd-roles { margin-top: 0.3rem; font-size: 0.78rem; color: var(--pico-muted-color); }
+  .company-detail .cd-loader { color: var(--pico-muted-color); font-style: italic; }
+</style>
+{% endblock %}
+
 {% block content %}
 <h2>📊 Market Intelligence</h2>
 
 <!-- Stats cards -->
-<div class="cards-grid" style="margin-bottom: 1.5rem;">
-  <div class="card"><p class="stat-number">{{ event_count }}</p><p class="stat-label">Events</p></div>
-  <div class="card"><p class="stat-number">{{ entity_count }}</p><p class="stat-label">Entities</p></div>
-  <div class="card"><p class="stat-number">{{ edge_count }}</p><p class="stat-label">Graph Edges</p></div>
-  <div class="card"><p class="stat-number">{{ snapshot_count }}</p><p class="stat-label">Trend Snapshots</p></div>
+<div class="market-stats">
+  <div class="market-stat"><p class="ms-num">{{ event_count }}</p><p class="ms-lbl">Events</p></div>
+  <div class="market-stat"><p class="ms-num">{{ entity_count }}</p><p class="ms-lbl">Entities</p></div>
+  <div class="market-stat"><p class="ms-num">{{ edge_count }}</p><p class="ms-lbl">Graph Edges</p></div>
+  <div class="market-stat"><p class="ms-num">{{ snapshot_count }}</p><p class="ms-lbl">Trend Snapshots</p></div>
 </div>
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
-  <!-- Top Skills -->
-  <div class="card">
+<!-- ═══ Charts row: Skills & Tools ═══ -->
+<div class="two-col">
+  <div class="panel">
     <h4>🔧 Top Skills</h4>
     {% if top_skills %}
-    <table>
-      <thead><tr><th>Skill</th><th>Count</th></tr></thead>
-      <tbody>
-        {% for s in top_skills %}
-        <tr><td>{{ s.display_name }}</td><td>{{ s.count }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    {% set max_skill = top_skills[0].count if top_skills else 1 %}
+    {% for s in top_skills %}
+    <div class="hbar-row">
+      <span class="hbar-name" title="{{ s.display_name }}">{{ s.display_name }}</span>
+      <div class="hbar-track">
+        <div class="hbar-fill" style="width: {{ (s.count / max_skill * 100)|int }}%; background: linear-gradient(90deg, #3b82f6, #6366f1);"></div>
+      </div>
+      <span class="hbar-val">{{ s.count }}</span>
+    </div>
+    {% endfor %}
     {% else %}
-    <p style="color: var(--pico-muted-color);">No data yet. Run <code>hunt market ingest → extract → graph</code> first.</p>
+    <p style="color: var(--pico-muted-color);">No data yet. Run the market pipeline first.</p>
     {% endif %}
   </div>
 
-  <!-- Top Tools -->
-  <div class="card">
+  <div class="panel">
     <h4>🛠️ Top Tools</h4>
     {% if top_tools %}
-    <table>
-      <thead><tr><th>Tool</th><th>Count</th></tr></thead>
-      <tbody>
-        {% for t in top_tools %}
-        <tr><td>{{ t.display_name }}</td><td>{{ t.count }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    {% set max_tool = top_tools[0].count if top_tools else 1 %}
+    {% for t in top_tools %}
+    <div class="hbar-row">
+      <span class="hbar-name" title="{{ t.display_name }}">{{ t.display_name }}</span>
+      <div class="hbar-track">
+        <div class="hbar-fill" style="width: {{ (t.count / max_tool * 100)|int }}%; background: linear-gradient(90deg, #f59e0b, #ef4444);"></div>
+      </div>
+      <span class="hbar-val">{{ t.count }}</span>
+    </div>
+    {% endfor %}
     {% else %}
     <p style="color: var(--pico-muted-color);">No data yet.</p>
     {% endif %}
   </div>
 </div>
 
-<!-- Rising trends -->
+<!-- ═══ Rising Trends ═══ -->
 {% if rising %}
-<div class="card" style="margin-top: 1.5rem;">
+<div class="panel" style="margin-bottom: 1.5rem;">
   <h4>📈 Rising Trends</h4>
-  <table>
-    <thead><tr><th>Entity</th><th>Type</th><th>Frequency</th><th>Momentum</th></tr></thead>
-    <tbody>
-      {% for r in rising %}
-      <tr>
-        <td>{{ r.display_name }}</td>
-        <td><span class="status-badge status-scored">{{ r.entity_type }}</span></td>
-        <td>{{ r.frequency|int }}</td>
-        <td>{% if r.momentum > 0 %}↑{% elif r.momentum < 0 %}↓{% else %}→{% endif %} {{ r.momentum }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.6rem;">
+    {% for r in rising %}
+    <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.6rem; border-radius: 8px; background: #f0fdf4; border: 1px solid #bbf7d0;">
+      <span style="font-size: 1.1rem;">{% if r.momentum > 0 %}🔼{% elif r.momentum < 0 %}🔽{% else %}➡️{% endif %}</span>
+      <div>
+        <div style="font-size: 0.82rem; font-weight: 600;">{{ r.display_name }}</div>
+        <div style="font-size: 0.68rem; color: var(--pico-muted-color);">
+          {{ r.entity_type }} · freq {{ r.frequency|int }} ·
+          <span class="{% if r.momentum > 0 %}mom-up{% elif r.momentum < 0 %}mom-down{% else %}mom-flat{% endif %}">
+            {% if r.momentum > 0 %}+{% endif %}{{ r.momentum }}
+          </span>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
 </div>
 {% endif %}
 
-<!-- Top Companies -->
+<!-- ═══ Top Companies (inline detail) ═══ -->
 {% if top_companies %}
-<div class="card" style="margin-top: 1.5rem;">
+<div class="panel" style="margin-bottom: 1.5rem;">
   <h4>🏢 Top Companies</h4>
   <table>
     <thead><tr><th>Company</th><th>Job Postings</th><th></th></tr></thead>
@@ -77,18 +130,34 @@
       {% for c in top_companies %}
       <tr>
         <td><strong>{{ c.name }}</strong></td>
-        <td>{{ c.event_count }}</td>
-        <td><a href="/api/market/companies/{{ c.name }}" target="_blank" style="font-size:0.8rem">details →</a></td>
+        <td>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <div style="width: 60px; height: 12px; background: #f1f5f9; border-radius: 3px; overflow: hidden;">
+              <div style="height: 100%; border-radius: 3px; background: #6366f1; width: {{ (c.event_count / top_companies[0].event_count * 100)|int }}%;"></div>
+            </div>
+            <span style="font-size: 0.82rem; font-weight: 600;">{{ c.event_count }}</span>
+          </div>
+        </td>
+        <td>
+          <a href="javascript:void(0)" onclick="toggleCompanyDetail('{{ c.name }}', this)" style="font-size: 0.78rem; white-space: nowrap;">
+            ▶ details
+          </a>
+        </td>
       </tr>
+      <tr><td colspan="3" style="padding: 0; border: none;">
+        <div class="company-detail" id="cd-{{ loop.index }}">
+          <div class="cd-loader">Loading…</div>
+        </div>
+      </td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
 {% endif %}
 
-<!-- Role Archetypes -->
+<!-- ═══ Role Archetypes ═══ -->
 {% if role_archetypes %}
-<div class="card" style="margin-top: 1.5rem;">
+<div class="panel" style="margin-bottom: 1.5rem;">
   <h4>🎯 Role Archetypes</h4>
   {% for role in role_archetypes %}
   <details {% if loop.first %}open{% endif %}>
@@ -101,7 +170,14 @@
         <tr>
           <td>{{ req.display_name }}</td>
           <td><span class="status-badge status-scored">{{ req.entity_type }}</span></td>
-          <td>{{ (req.importance * 100)|int }}%</td>
+          <td>
+            <div style="display: flex; align-items: center; gap: 0.4rem;">
+              <div style="width: 50px; height: 8px; background: #f1f5f9; border-radius: 4px; overflow: hidden;">
+                <div style="height: 100%; border-radius: 4px; background: #6366f1; width: {{ (req.importance * 100)|int }}%;"></div>
+              </div>
+              <span style="font-size: 0.75rem;">{{ (req.importance * 100)|int }}%</span>
+            </div>
+          </td>
           <td>{{ (req.confidence * 100)|int }}%</td>
         </tr>
         {% endfor %}
@@ -113,9 +189,9 @@
 </div>
 {% endif %}
 
-<!-- Candidate Capabilities -->
+<!-- ═══ Candidate Capabilities ═══ -->
 {% if candidate_capabilities %}
-<div class="card" style="margin-top: 1.5rem;">
+<div class="panel" style="margin-bottom: 1.5rem;">
   <h4>👤 Candidate Capabilities</h4>
   <table>
     <thead><tr><th>Capability</th><th>Type</th><th>Proficiency</th><th>Confidence</th><th>Transferability</th></tr></thead>
@@ -125,10 +201,12 @@
         <td>{{ cap.display_name }}</td>
         <td><span class="status-badge status-scored">{{ cap.entity_type }}</span></td>
         <td>
-          <div style="background:#e2e8f0;border-radius:4px;height:8px;width:80px;display:inline-block;vertical-align:middle">
-            <div style="background:#2064c6;border-radius:4px;height:8px;width:{{ (cap.proficiency_estimate * 80)|int }}px"></div>
+          <div style="display: flex; align-items: center; gap: 0.4rem;">
+            <div style="background:#e2e8f0;border-radius:4px;height:8px;width:60px;overflow:hidden">
+              <div style="background:#2064c6;border-radius:4px;height:8px;width:{{ (cap.proficiency_estimate * 60)|int }}px"></div>
+            </div>
+            <span style="font-size: 0.75rem;">{{ (cap.proficiency_estimate * 100)|int }}%</span>
           </div>
-          {{ (cap.proficiency_estimate * 100)|int }}%
         </td>
         <td>{{ (cap.confidence * 100)|int }}%</td>
         <td>{{ (cap.transferability * 100)|int }}%</td>
@@ -139,9 +217,9 @@
 </div>
 {% endif %}
 
-<!-- Opportunity Matches -->
+<!-- ═══ Opportunity Matches ═══ -->
 {% if opportunity_matches %}
-<div class="card" style="margin-top: 1.5rem;">
+<div class="panel" style="margin-bottom: 1.5rem;">
   <h4>🏆 Opportunity Matches</h4>
   <table>
     <thead><tr><th>Role</th><th>Score</th><th>Confidence</th><th>Learning Upside</th><th>Risk</th><th>Hard Gaps</th></tr></thead>
@@ -149,7 +227,11 @@
       {% for m in opportunity_matches %}
       <tr>
         <td><strong>{{ m.role_key }}</strong></td>
-        <td>{{ (m.opportunity_score * 100)|int }}%</td>
+        <td>
+          {% set os = (m.opportunity_score * 100)|int %}
+          {% set oc = '#ef4444' if os < 30 else '#f59e0b' if os < 60 else '#22c55e' %}
+          <span style="color: {{ oc }}; font-weight: 700; font-size: 1.05rem;">{{ os }}%</span>
+        </td>
         <td>{{ (m.confidence * 100)|int }}%</td>
         <td>{{ (m.learning_upside * 100)|int }}%</td>
         <td>{{ (m.mismatch_risk * 100)|int }}%</td>
@@ -161,18 +243,25 @@
 </div>
 {% endif %}
 
-<!-- Adjacent Roles -->
+<!-- ═══ Adjacent Roles ═══ -->
 {% if adjacent_roles %}
-<div class="card" style="margin-top: 1.5rem;">
+<div class="panel" style="margin-bottom: 1.5rem;">
   <h4>🔀 Adjacent Roles</h4>
-  <p style="color: var(--pico-muted-color); font-size: 0.85rem;">Roles reachable via the skill graph that you could transition into.</p>
+  <p style="color: var(--pico-muted-color); font-size: 0.85rem; margin-top: 0;">Roles reachable via the skill graph that you could transition into.</p>
   <table>
     <thead><tr><th>Role</th><th>Proximity</th><th>Hops</th></tr></thead>
     <tbody>
       {% for a in adjacent_roles %}
       <tr>
         <td>{{ a.display_name }}</td>
-        <td>{{ (a.proximity * 100)|int }}%</td>
+        <td>
+          <div style="display: flex; align-items: center; gap: 0.4rem;">
+            <div style="width: 50px; height: 8px; background: #f1f5f9; border-radius: 4px; overflow: hidden;">
+              <div style="height: 100%; border-radius: 4px; background: #10b981; width: {{ (a.proximity * 100)|int }}%;"></div>
+            </div>
+            <span style="font-size: 0.75rem;">{{ (a.proximity * 100)|int }}%</span>
+          </div>
+        </td>
         <td>{{ a.hops }}</td>
       </tr>
       {% endfor %}
@@ -180,22 +269,59 @@
   </table>
 </div>
 {% endif %}
+{% endblock %}
 
-<!-- API links -->
-<div style="margin-top: 1.5rem;">
-  <details>
-    <summary>API Endpoints</summary>
-    <ul>
-      <li><a href="/api/market/overview"><code>/api/market/overview</code></a> — summary stats (JSON)</li>
-      <li><a href="/api/market/trends"><code>/api/market/trends</code></a> — trend data (JSON)</li>
-      <li><a href="/api/market/entities"><code>/api/market/entities</code></a> — entities by type (JSON)</li>
-      <li><a href="/api/market/roles"><code>/api/market/roles</code></a> — role archetypes (JSON)</li>
-      <li><a href="/api/market/candidate/default"><code>/api/market/candidate/{profile}</code></a> — candidate capabilities (JSON)</li>
-      <li><a href="/api/market/match/default"><code>/api/market/match/{profile}</code></a> — opportunity matches (JSON)</li>
-      <li><code>/api/market/gap/{profile}/{role}</code> — gap analysis for a candidate-role pair (JSON)</li>
-      <li><a href="/api/market/dialogue/sessions"><code>/api/market/dialogue/sessions</code></a> — dialogue sessions (JSON)</li>
-      <li><code>/api/market/dialogue/sessions/{id}</code> — session detail with turns and assessments (JSON)</li>
-    </ul>
-  </details>
-</div>
+{% block extra_scripts %}
+<script>
+function toggleCompanyDetail(company, linkEl) {
+  // Find the detail div — it's in the next table row
+  var row = linkEl.closest('tr');
+  var detailRow = row.nextElementSibling;
+  var panel = detailRow.querySelector('.company-detail');
+
+  if (panel.classList.contains('open')) {
+    panel.classList.remove('open');
+    linkEl.textContent = '▶ details';
+    return;
+  }
+
+  linkEl.textContent = '▼ details';
+  panel.classList.add('open');
+  panel.innerHTML = '<div class="cd-loader">Loading…</div>';
+
+  fetch('/api/market/companies/' + encodeURIComponent(company))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var html = '<div style="margin-bottom: 0.4rem;"><strong>' + escH(data.company) + '</strong> — ' + data.event_count + ' job posting(s)</div>';
+
+      if (data.roles && data.roles.length) {
+        html += '<div class="cd-roles"><strong>Hiring for:</strong> ' + data.roles.map(escH).join(', ') + '</div>';
+      }
+
+      if (data.top_entities && data.top_entities.length) {
+        html += '<div style="margin-top: 0.4rem; font-size: 0.78rem; font-weight: 600;">Top required skills & tools:</div>';
+        html += '<div class="cd-skills">';
+        data.top_entities.forEach(function(e) {
+          var bg = e.entity_type === 'skill' ? '#dbeafe' : e.entity_type === 'tool' ? '#fef3c7' : '#e0e7ff';
+          var fg = e.entity_type === 'skill' ? '#1e40af' : e.entity_type === 'tool' ? '#92400e' : '#4338ca';
+          html += '<kbd style="background:' + bg + ';color:' + fg + ';font-size:0.7rem;">' + escH(e.display_name) + ' (' + e.count + ')</kbd>';
+        });
+        html += '</div>';
+      }
+
+      if (!data.top_entities || !data.top_entities.length) {
+        html += '<div style="color: var(--pico-muted-color); font-size: 0.78rem; margin-top: 0.3rem;">No extraction data available for this company.</div>';
+      }
+
+      panel.innerHTML = html;
+    })
+    .catch(function(err) {
+      panel.innerHTML = '<div style="color: #ef4444;">Failed to load: ' + escH(String(err)) + '</div>';
+    });
+}
+
+function escH(t) {
+  return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
 {% endblock %}
