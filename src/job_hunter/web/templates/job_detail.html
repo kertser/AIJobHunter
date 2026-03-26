@@ -1,7 +1,21 @@
 {% extends "base.html" %}
 {% block title %}{{ job.title }} — AI Job Hunter{% endblock %}
 {% block content %}
-<nav aria-label="breadcrumb"><ul><li><a href="/jobs">Jobs</a></li><li>{{ job.title }}</li></ul></nav>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem; padding: 0.5rem 0.8rem; background: var(--pico-card-background-color); border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+  {% if prev_hash %}
+  <a href="/api/jobs/{{ prev_hash }}" role="button" style="font-size: 0.85rem; padding: 0.35rem 1rem; background: var(--pico-primary); color: #fff; border: none; border-radius: 0.35rem; text-decoration: none;">← Prev</a>
+  {% else %}
+  <span style="display: inline-block; font-size: 0.85rem; padding: 0.35rem 1rem; background: #e5e7eb; color: #9ca3af; border-radius: 0.35rem; cursor: default;">← Prev</span>
+  {% endif %}
+
+  <a href="/jobs" style="font-size: 0.9rem; font-weight: 600; color: var(--pico-primary); text-decoration: none;">↑ Back to Jobs</a>
+
+  {% if next_hash %}
+  <a href="/api/jobs/{{ next_hash }}" role="button" style="font-size: 0.85rem; padding: 0.35rem 1rem; background: var(--pico-primary); color: #fff; border: none; border-radius: 0.35rem; text-decoration: none;">Next →</a>
+  {% else %}
+  <span style="display: inline-block; font-size: 0.85rem; padding: 0.35rem 1rem; background: #e5e7eb; color: #9ca3af; border-radius: 0.35rem; cursor: default;">Next →</span>
+  {% endif %}
+</div>
 
 <h2>{{ job.title }}</h2>
 <p><strong>{{ job.company }}</strong> · {{ job.location }}

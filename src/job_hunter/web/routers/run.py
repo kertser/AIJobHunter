@@ -384,6 +384,27 @@ async def run_market(request: Request):
     return JSONResponse({"started": "market"}, status_code=202)
 
 
+@router.post("/api/run/report")
+async def run_report(request: Request):
+    """Generate a daily report (fast, no SSE needed)."""
+    settings = request.app.state.settings
+    engine = request.app.state.engine
+
+    from job_hunter.db.repo import make_session
+    from job_hunter.reporting.report import generate_report
+
+    session = make_session(engine)
+    try:
+        summary = generate_report(session=session, data_dir=settings.data_dir)
+        return JSONResponse({
+            "date": summary.get("date"),
+            "md_path": str(summary.get("md_path", "")),
+            "json_path": str(summary.get("json_path", "")),
+        })
+    finally:
+        session.close()
+
+
 @router.get("/api/run/status")
 async def run_status_sse(request: Request):
     tm: TaskManager = request.app.state.task_manager

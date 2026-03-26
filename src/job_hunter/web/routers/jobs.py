@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from job_hunter.db.models import ApplicationAttempt, ApplicationResult, Job, JobStatus, Score
@@ -109,6 +109,37 @@ async def get_job(job_hash: str, request: Request, session: Session = Depends(ge
     applied_map = _get_applied_map(session, [job_hash])
     applied_at = applied_map.get(job_hash)
 
+    # Prev / next neighbours (by collected_at desc, hash desc — same order as the jobs list).
+    # Uses hash as tiebreaker so navigation works even when many jobs share the same timestamp.
+    prev_hash: str | None = None
+    next_hash: str | None = None
+
+    # "prev" = the next newer job (appears *before* current in the DESC list)
+    prev_hash = session.execute(
+        select(Job.hash)
+        .where(
+            or_(
+                Job.collected_at > job.collected_at,
+                and_(Job.collected_at == job.collected_at, Job.hash > job.hash),
+            )
+        )
+        .order_by(Job.collected_at.asc(), Job.hash.asc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+    # "next" = the next older job (appears *after* current in the DESC list)
+    next_hash = session.execute(
+        select(Job.hash)
+        .where(
+            or_(
+                Job.collected_at < job.collected_at,
+                and_(Job.collected_at == job.collected_at, Job.hash < job.hash),
+            )
+        )
+        .order_by(Job.collected_at.desc(), Job.hash.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
     # Market intelligence boost (safe to call even when tables are empty)
     market_boost: dict[str, Any] = {}
     try:
@@ -121,6 +152,7 @@ async def get_job(job_hash: str, request: Request, session: Session = Depends(ge
     return templates.TemplateResponse(request, "job_detail.html", {
         "job": job, "scores": scores, "attempts": attempts,
         "applied_at": applied_at, "market": market_boost,
+        "prev_hash": prev_hash, "next_hash": next_hash,
     })
 
 
