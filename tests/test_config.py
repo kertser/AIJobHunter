@@ -74,17 +74,17 @@ class TestSaveSettingsEnv:
         settings = AppSettings(resend_api_key="re_test_123", notification_email="a@b.com")
         save_settings_env(settings, env_path)
         content = env_path.read_text()
-        assert "JOBHUNTER_RESEND_API_KEY='re_test_123'" in content
-        assert "JOBHUNTER_NOTIFICATION_EMAIL='a@b.com'" in content
+        assert "JOBHUNTER_RESEND_API_KEY=re_test_123" in content
+        assert "JOBHUNTER_NOTIFICATION_EMAIL=a@b.com" in content
 
     def test_preserves_existing_comments(self, tmp_path: Path) -> None:
         env_path = tmp_path / ".env"
-        env_path.write_text("# My comment\nJOBHUNTER_MOCK='false'\n")
+        env_path.write_text("# My comment\nJOBHUNTER_MOCK=false\n")
         settings = AppSettings(mock=True)
         save_settings_env(settings, env_path)
         content = env_path.read_text()
         assert "# My comment" in content
-        assert "JOBHUNTER_MOCK='true'" in content
+        assert "JOBHUNTER_MOCK=true" in content
 
     def test_round_trip_resend_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         env_path = tmp_path / ".env"
@@ -102,13 +102,13 @@ class TestSaveSettingsEnv:
         settings = AppSettings(log_level=LogLevel.DEBUG)
         save_settings_env(settings, env_path)
         content = env_path.read_text()
-        assert "JOBHUNTER_LOG_LEVEL='DEBUG'" in content
+        assert "JOBHUNTER_LOG_LEVEL=DEBUG" in content
 
     def test_bool_persisted_as_lowercase(self, tmp_path: Path) -> None:
         env_path = tmp_path / ".env"
         settings = AppSettings(notifications_enabled=True, smtp_use_tls=False)
         save_settings_env(settings, env_path)
         content = env_path.read_text()
-        assert "JOBHUNTER_NOTIFICATIONS_ENABLED='true'" in content
-        assert "JOBHUNTER_SMTP_USE_TLS='false'" in content
+        assert "JOBHUNTER_NOTIFICATIONS_ENABLED=true" in content
+        assert "JOBHUNTER_SMTP_USE_TLS=false" in content
 

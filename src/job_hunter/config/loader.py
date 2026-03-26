@@ -110,7 +110,7 @@ def save_settings_env(settings: AppSettings, dotenv_path: Path | None = None) ->
             value = value.value
         else:
             value = str(value)
-        set_key(env_str, env_var, value)
+        set_key(env_str, env_var, value, quote_mode="never")
 
 
 # ---------------------------------------------------------------------------
