@@ -85,6 +85,9 @@ _PERSISTED_FIELDS: dict[str, str] = {
     "smtp_use_tls": "JOBHUNTER_SMTP_USE_TLS",
     "notification_email": "JOBHUNTER_NOTIFICATION_EMAIL",
     "notifications_enabled": "JOBHUNTER_NOTIFICATIONS_ENABLED",
+    "secret_key": "JOBHUNTER_SECRET_KEY",
+    "registration_enabled": "JOBHUNTER_REGISTRATION_ENABLED",
+    "admin_password": "JOBHUNTER_ADMIN_PASSWORD",
 }
 
 

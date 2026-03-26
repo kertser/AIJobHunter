@@ -8,6 +8,8 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from job_hunter.web.deps import get_user_data_dir
+
 logger = logging.getLogger("job_hunter.web.resume_review")
 
 router = APIRouter(tags=["resume_review"])
@@ -17,12 +19,15 @@ router = APIRouter(tags=["resume_review"])
 async def resume_review_page(request: Request):
     templates = request.app.state.templates
     engine = request.app.state.engine
-    settings = request.app.state.settings
+
+    user = getattr(request.state, "user", None)
+    user_id = user.id if user else None
+    data_dir = get_user_data_dir(request)
 
     from job_hunter.db.repo import get_top_missing_skills, make_session
 
     session = make_session(engine)
-    missing_skills = get_top_missing_skills(session, limit=20)
+    missing_skills = get_top_missing_skills(session, limit=20, user_id=user_id)
     session.close()
 
     # Load user profile
@@ -30,7 +35,7 @@ async def resume_review_page(request: Request):
     user_summary = ""
     try:
         from job_hunter.config.loader import load_user_profile
-        up_path = settings.data_dir / "user_profile.yml"
+        up_path = data_dir / "user_profile.yml"
         if up_path.exists():
             up = load_user_profile(up_path)
             user_skills = up.skills
@@ -48,10 +53,15 @@ async def resume_review_page(request: Request):
 @router.post("/api/resume-review")
 async def run_resume_review(request: Request):
     """Analyse resume gaps and suggest improvements using LLM."""
-    settings = request.app.state.settings
     engine = request.app.state.engine
 
-    api_key = settings.openai_api_key
+    user = getattr(request.state, "user", None)
+    user_id = user.id if user else None
+    data_dir = get_user_data_dir(request)
+
+    from job_hunter.web.deps import get_effective_settings
+    eff = get_effective_settings(request)
+    api_key = eff.openai_api_key
     if not api_key:
         return JSONResponse(
             {"error": "OpenAI API key not set. Go to Settings to configure it."},
@@ -62,14 +72,15 @@ async def run_resume_review(request: Request):
     from job_hunter.db.repo import get_top_missing_skills, make_session
 
     session = make_session(engine)
-    missing_skills = get_top_missing_skills(session, limit=20)
+    missing_skills = get_top_missing_skills(session, limit=20, user_id=user_id)
 
-    # Get top scored job descriptions for context
+    # Get top scored job descriptions for context (scoped to user)
     from sqlalchemy import select
     from job_hunter.db.models import Job, Score
-    top_scores = session.execute(
-        select(Score).order_by(Score.llm_fit_score.desc()).limit(15)
-    ).scalars().all()
+    score_q = select(Score).order_by(Score.llm_fit_score.desc()).limit(15)
+    if user_id is not None:
+        score_q = score_q.where(Score.user_id == user_id)
+    top_scores = session.execute(score_q).scalars().all()
 
     job_contexts = []
     for score in top_scores:
@@ -84,10 +95,10 @@ async def run_resume_review(request: Request):
             )
     session.close()
 
-    # Load user profile
+    # Load user profile from per-user data dir
     user_profile_text = ""
     try:
-        up_path = settings.data_dir / "user_profile.yml"
+        up_path = data_dir / "user_profile.yml"
         if up_path.exists():
             up = load_user_profile(up_path)
             user_profile_text = (

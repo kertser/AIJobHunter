@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from job_hunter.web.deps import get_db
 
 router = APIRouter(tags=["settings"])
 
@@ -31,7 +34,8 @@ class SettingsUpdate(BaseModel):
 @router.get("/settings")
 async def settings_page(request: Request):
     templates = request.app.state.templates
-    settings = request.app.state.settings
+    from job_hunter.web.deps import get_effective_settings
+    settings = get_effective_settings(request)
     return templates.TemplateResponse(request, "settings.html", {
         "settings": settings,
         "api_key_masked": _mask_key(settings.openai_api_key),
@@ -42,7 +46,8 @@ async def settings_page(request: Request):
 
 @router.get("/api/settings")
 async def get_settings_api(request: Request):
-    s = request.app.state.settings
+    from job_hunter.web.deps import get_effective_settings
+    s = get_effective_settings(request)
     return {
         "mock": s.mock,
         "dry_run": s.dry_run,
@@ -63,45 +68,59 @@ async def get_settings_api(request: Request):
 
 
 @router.put("/api/settings")
-async def update_settings_api(body: SettingsUpdate, request: Request):
-    s = request.app.state.settings
+async def update_settings_api(body: SettingsUpdate, request: Request, session: Session = Depends(get_db)):
+    user = getattr(request.state, "user", None)
+
+    # Collect non-None updates
+    updates: dict = {}
     if body.mock is not None:
-        s.mock = body.mock
+        updates["mock"] = body.mock
     if body.dry_run is not None:
-        s.dry_run = body.dry_run
+        updates["dry_run"] = body.dry_run
     if body.headless is not None:
-        s.headless = body.headless
+        updates["headless"] = body.headless
     if body.slowmo_ms is not None:
-        s.slowmo_ms = body.slowmo_ms
+        updates["slowmo_ms"] = body.slowmo_ms
     if body.log_level is not None:
         from job_hunter.config.models import LogLevel
-        s.log_level = LogLevel(body.log_level)
+        updates["log_level"] = body.log_level  # store as string for User row
     if body.openai_api_key and body.openai_api_key.strip():
-        s.openai_api_key = body.openai_api_key.strip()
-    # Email settings
+        updates["openai_api_key"] = body.openai_api_key.strip()
     if body.email_provider is not None:
-        s.email_provider = body.email_provider
+        updates["email_provider"] = body.email_provider
     if body.resend_api_key and body.resend_api_key.strip():
-        s.resend_api_key = body.resend_api_key.strip()
+        updates["resend_api_key"] = body.resend_api_key.strip()
     if body.smtp_host is not None:
-        s.smtp_host = body.smtp_host
+        updates["smtp_host"] = body.smtp_host
     if body.smtp_port is not None:
-        s.smtp_port = body.smtp_port
+        updates["smtp_port"] = body.smtp_port
     if body.smtp_user is not None:
-        s.smtp_user = body.smtp_user
+        updates["smtp_user"] = body.smtp_user
     if body.smtp_password and body.smtp_password.strip():
-        s.smtp_password = body.smtp_password.strip()
+        updates["smtp_password"] = body.smtp_password.strip()
     if body.smtp_use_tls is not None:
-        s.smtp_use_tls = body.smtp_use_tls
+        updates["smtp_use_tls"] = body.smtp_use_tls
     if body.notification_email is not None:
-        s.notification_email = body.notification_email
+        updates["notification_email"] = body.notification_email
     if body.notifications_enabled is not None:
-        s.notifications_enabled = body.notifications_enabled
+        updates["notifications_enabled"] = body.notifications_enabled
 
-    # Persist to .env so settings survive a restart
-    from job_hunter.config.loader import save_settings_env
-    dotenv_path = getattr(request.app.state, "dotenv_path", None)
-    save_settings_env(s, dotenv_path)
+    if user is not None:
+        # Write per-user settings to the User row
+        from job_hunter.auth.repo import update_user_settings
+        update_user_settings(session, user.id, **updates)
+    else:
+        # Fallback: mutate global settings (legacy / CLI)
+        s = request.app.state.settings
+        for k, v in updates.items():
+            if k == "log_level":
+                from job_hunter.config.models import LogLevel
+                s.log_level = LogLevel(v)
+            elif hasattr(s, k):
+                setattr(s, k, v)
+        from job_hunter.config.loader import save_settings_env
+        dotenv_path = getattr(request.app.state, "dotenv_path", None)
+        save_settings_env(s, dotenv_path)
 
     return {"updated": True}
 
@@ -113,8 +132,9 @@ async def test_email(request: Request):
         build_notifier_from_settings,
         send_test_email,
     )
+    from job_hunter.web.deps import get_effective_settings
 
-    s = request.app.state.settings
+    s = get_effective_settings(request)
 
     if not s.notification_email:
         return JSONResponse(

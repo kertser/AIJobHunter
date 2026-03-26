@@ -19,6 +19,25 @@
 
   <div id="setup-form">
     <form id="onboarding-form" enctype="multipart/form-data" onsubmit="startGeneration(event)">
+      {% if not is_mock %}
+      <fieldset style="margin-bottom: 1.5rem; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.2rem;">
+        <legend style="font-weight: 600; font-size: 0.95rem;">🔑 OpenAI API Key</legend>
+        {% if has_api_key %}
+        <p style="margin: 0 0 0.5rem; font-size: 0.85rem; color: #059669;">
+          ✅ An API key is already configured. Leave blank to keep using it, or enter a new one to replace it.
+        </p>
+        {% else %}
+        <p style="margin: 0 0 0.5rem; font-size: 0.85rem; color: #b45309;">
+          ⚠️ No API key found. Profile generation requires an OpenAI API key.
+          <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get one here →</a>
+        </p>
+        {% endif %}
+        <input type="password" name="openai_api_key" id="api-key-input"
+               placeholder="sk-..."
+               {% if not has_api_key %}required{% endif %}>
+      </fieldset>
+      {% endif %}
+
       <label>
         Resume PDF <small>(required)</small>
         <input type="file" name="resume" accept=".pdf" required id="resume-input">

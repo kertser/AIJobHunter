@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Register — AI Job Hunter</title>
+  <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <style>
+    body { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: linear-gradient(135deg, #05172b 0%, #2064c6 100%); }
+    .login-card { background: #fff; padding: 2.5rem 2rem; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.25); width: 100%; max-width: 400px; }
+    .login-card h2 { text-align: center; margin-bottom: 0.3rem; }
+    .login-card .subtitle { text-align: center; color: #64748b; font-size: 0.88rem; margin-bottom: 1.5rem; }
+    .login-card input { margin-bottom: 1rem; }
+    .login-card button { width: 100%; }
+    .login-card .alt-link { text-align: center; font-size: 0.85rem; margin-top: 1rem; }
+    .login-card .alt-link a { font-weight: 600; }
+    .error-msg { color: #dc2626; font-size: 0.85rem; text-align: center; margin-bottom: 0.5rem; display: none; }
+    .success-msg { color: #059669; font-size: 0.85rem; text-align: center; margin-bottom: 0.5rem; display: none; }
+    .brand-top { text-align: center; margin-bottom: 1.5rem; }
+    .brand-top h1 { color: #fff; font-size: 1.3rem; margin: 0.5rem 0 0; }
+    .hint { font-size: 0.78rem; color: #94a3b8; margin-top: -0.6rem; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="brand-top">
+    <h1>🤖 AI Job Hunter</h1>
+  </div>
+
+  <div class="login-card">
+    <h2>Create Account</h2>
+    <p class="subtitle">Set up your AI Job Hunter account</p>
+
+    <div id="error-msg" class="error-msg"></div>
+    <div id="success-msg" class="success-msg"></div>
+
+    <form id="register-form" onsubmit="doRegister(event)">
+      <label>
+        Display Name
+        <input type="text" name="display_name" placeholder="Jane Doe" autofocus>
+      </label>
+      <label>
+        Email
+        <input type="email" name="email" required placeholder="you@example.com">
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" required placeholder="••••••••" minlength="8">
+      </label>
+      <p class="hint">Minimum 8 characters</p>
+
+      <!-- Admin password — shown only for the very first user -->
+      <div id="admin-pw-section" style="display:none; border-top: 1px solid #e2e8f0; padding-top: 1rem; margin-top: 0.5rem;">
+        <p style="font-size: 0.82rem; color: #1e40af; font-weight: 600; margin-bottom: 0.4rem;">🛡️ You are the first user — set the Admin panel password</p>
+        <label>
+          Admin Password
+          <input type="password" name="admin_password" placeholder="Admin panel password (optional)">
+        </label>
+        <p class="hint">Anyone with this password can manage users in the Admin panel. Leave blank for no password gate.</p>
+      </div>
+
+      <button type="submit" id="register-btn">🚀 Create Account</button>
+    </form>
+
+    <div class="alt-link">
+      Already have an account? <a href="/login">Sign in →</a>
+    </div>
+  </div>
+
+  <script>
+  // Check if this is the first user and show admin password field
+  fetch('/api/auth/is-first-user')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.is_first_user) {
+        document.getElementById('admin-pw-section').style.display = '';
+      }
+    })
+    .catch(function() {});
+
+  function doRegister(e) {
+    e.preventDefault();
+    var form = document.getElementById('register-form');
+    var fd = new FormData(form);
+    var btn = document.getElementById('register-btn');
+    var errEl = document.getElementById('error-msg');
+    var okEl = document.getElementById('success-msg');
+    errEl.style.display = 'none';
+    okEl.style.display = 'none';
+    btn.disabled = true;
+    btn.textContent = '⏳ Creating…';
+
+    fetch('/api/auth/register', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        email: fd.get('email'),
+        password: fd.get('password'),
+        display_name: fd.get('display_name') || '',
+        admin_password: fd.get('admin_password') || '',
+      })
+    })
+    .then(function(r) {
+      return r.json().then(function(data) {
+        if (r.ok) {
+          okEl.textContent = 'Account created! Redirecting…';
+          okEl.style.display = 'block';
+          setTimeout(function() { window.location.href = '/onboarding'; }, 500);
+        } else {
+          errEl.textContent = data.error || 'Registration failed';
+          errEl.style.display = 'block';
+          btn.disabled = false;
+          btn.textContent = '🚀 Create Account';
+        }
+      });
+    })
+    .catch(function(err) {
+      errEl.textContent = 'Network error: ' + err;
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = '🚀 Create Account';
+    });
+  }
+  </script>
+</body>
+</html>
+

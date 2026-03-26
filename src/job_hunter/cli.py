@@ -84,6 +84,41 @@ def init(ctx: typer.Context) -> None:
 
 
 @app.command()
+def reset_db(ctx: typer.Context) -> None:
+    """Drop ALL tables and re-create the database from scratch.
+
+    ⚠️  This deletes every job, score, application, user, and market record.
+    """
+    state = _get_state(ctx)
+    data_dir = state.settings.data_dir
+    db_path = data_dir / "job_hunter.db"
+
+    if not db_path.exists():
+        rprint("[yellow]⚠[/yellow]  Database file does not exist — nothing to reset.")
+        raise typer.Exit()
+
+    confirm = typer.confirm(
+        f"This will permanently delete ALL data in {db_path}. Continue?"
+    )
+    if not confirm:
+        rprint("[dim]Aborted.[/dim]")
+        raise typer.Exit()
+
+    from job_hunter.db.models import Base
+    import job_hunter.market.db_models  # noqa: F401
+    import job_hunter.auth.models       # noqa: F401
+
+    engine = get_engine(data_dir)
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+
+    from job_hunter.db.migrations import run_migrations
+    run_migrations(engine)
+
+    rprint(f"[green]✓[/green] Database reset — all tables re-created at {db_path}")
+
+
+@app.command()
 def login(ctx: typer.Context) -> None:
     """Open a browser for manual LinkedIn login and save cookies."""
     import asyncio

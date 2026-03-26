@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -46,6 +46,20 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         if not hasattr(app.state, "task_manager") or app.state.task_manager is None:
             app.state.task_manager = TaskManager()
         app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+        # ── Secret key for JWT auth ──
+        from job_hunter.auth.security import _ensure_secret
+        secret = _ensure_secret(settings.secret_key)
+        if not settings.secret_key:
+            # Persist so it survives restarts
+            settings.secret_key = secret
+            try:
+                from job_hunter.config.loader import save_settings_env
+                dotenv_path = getattr(app.state, "dotenv_path", None)
+                save_settings_env(settings, dotenv_path)
+            except Exception:
+                pass
+        app.state.secret_key = secret
 
         # Register custom Jinja2 filters
         import markupsafe
@@ -118,8 +132,36 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # Import and include routers
+    from job_hunter.web.routers import admin as admin_router
+    from job_hunter.web.routers import auth as auth_router
     from job_hunter.web.routers import dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings as settings_router, schedule
     from job_hunter.market.web.router import router as market_router
+
+    # ── Login-required middleware ──
+    # Public paths that don't require authentication
+    _PUBLIC_PREFIXES = (
+        "/login", "/register", "/api/auth/", "/api/health",
+        "/static/", "/favicon.ico",
+    )
+
+    @app.middleware("http")
+    async def login_required_middleware(request, call_next):
+        path = request.url.path
+        # Allow public paths through
+        if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
+            return await call_next(request)
+        # Check for auth token
+        from job_hunter.web.deps import get_current_user_optional
+        user = get_current_user_optional(request)
+        if user is None:
+            # For API calls, return 401 JSON; for pages, redirect to login
+            if path.startswith("/api/"):
+                from fastapi.responses import JSONResponse as _JR
+                return _JR({"detail": "Not authenticated"}, status_code=401)
+            return RedirectResponse(url="/login", status_code=302)
+        # Attach user to request state for downstream use
+        request.state.user = user
+        return await call_next(request)
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon():
@@ -149,6 +191,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             pass
         return {"status": "ok", "db_ok": db_ok, "scheduler_running": scheduler_ok}
 
+    app.include_router(auth_router.router)
+    app.include_router(admin_router.router)
     app.include_router(dashboard.router)
     app.include_router(onboarding.router)
     app.include_router(jobs.router)

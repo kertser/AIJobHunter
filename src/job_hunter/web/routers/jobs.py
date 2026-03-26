@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from job_hunter.db.models import ApplicationAttempt, ApplicationResult, Job, JobStatus, Score
 from job_hunter.db.repo import delete_job, get_scores_for_jobs
-from job_hunter.web.deps import get_db
+from job_hunter.web.deps import get_db, get_user_data_dir
 
 router = APIRouter(tags=["jobs"])
 
@@ -20,17 +21,25 @@ class StatusUpdate(BaseModel):
     status: str
 
 
-def _get_applied_map(session: Session, hashes: list[str]) -> dict:
+def _get_user_id(request: Request) -> uuid.UUID | None:
+    user = getattr(request.state, "user", None)
+    return user.id if user else None
+
+
+def _get_applied_map(session: Session, hashes: list[str], *, user_id: uuid.UUID | None = None) -> dict:
     """Build a map of job_hash → earliest applied_at datetime."""
     if not hashes:
         return {}
-    attempts = session.execute(
+    query = (
         select(ApplicationAttempt)
         .where(ApplicationAttempt.job_hash.in_(hashes))
         .where(ApplicationAttempt.result.in_([
             ApplicationResult.SUCCESS, ApplicationResult.DRY_RUN,
         ]))
-    ).scalars().all()
+    )
+    if user_id is not None:
+        query = query.where(ApplicationAttempt.user_id == user_id)
+    attempts = session.execute(query).scalars().all()
     result = {}
     for a in attempts:
         if a.job_hash not in result or (a.started_at and a.started_at < result[a.job_hash]):
@@ -40,8 +49,11 @@ def _get_applied_map(session: Session, hashes: list[str]) -> dict:
 
 @router.get("/jobs")
 async def jobs_page(request: Request, session: Session = Depends(get_db), status: str = ""):
+    user_id = _get_user_id(request)
     templates = request.app.state.templates
     query = select(Job).order_by(Job.collected_at.desc())
+    if user_id is not None:
+        query = query.where(Job.user_id == user_id)
     if status:
         try:
             query = query.where(Job.status == JobStatus(status))
@@ -49,8 +61,8 @@ async def jobs_page(request: Request, session: Session = Depends(get_db), status
             pass
     jobs = session.execute(query).scalars().all()
     hashes = [j.hash for j in jobs]
-    scores_map = get_scores_for_jobs(session, hashes)
-    applied_map = _get_applied_map(session, hashes)
+    scores_map = get_scores_for_jobs(session, hashes, user_id=user_id)
+    applied_map = _get_applied_map(session, hashes, user_id=user_id)
     # Show only statuses that are actually used in the pipeline
     statuses = [s.value for s in JobStatus if s != JobStatus.SCORED]
     return templates.TemplateResponse(request, "jobs.html", {
@@ -61,6 +73,7 @@ async def jobs_page(request: Request, session: Session = Depends(get_db), status
 
 @router.get("/api/jobs")
 async def list_jobs(
+    request: Request,
     session: Session = Depends(get_db),
     status: str = "",
     company: str = "",
@@ -68,7 +81,10 @@ async def list_jobs(
     page: int = 1,
     per_page: int = 50,
 ):
+    user_id = _get_user_id(request)
     query = select(Job)
+    if user_id is not None:
+        query = query.where(Job.user_id == user_id)
     if status:
         query = query.where(Job.status == JobStatus(status))
     if company:
@@ -79,7 +95,7 @@ async def list_jobs(
     query = query.offset((page - 1) * per_page).limit(per_page)
     jobs = session.execute(query).scalars().all()
     hashes = [j.hash for j in jobs]
-    scores_map = get_scores_for_jobs(session, hashes)
+    scores_map = get_scores_for_jobs(session, hashes, user_id=user_id)
     result = []
     for j in jobs:
         entry: dict[str, Any] = {
@@ -98,7 +114,11 @@ async def list_jobs(
 
 @router.get("/api/jobs/{job_hash}")
 async def get_job(job_hash: str, request: Request, session: Session = Depends(get_db)):
-    job = session.execute(select(Job).where(Job.hash == job_hash)).scalar_one_or_none()
+    user_id = _get_user_id(request)
+    query = select(Job).where(Job.hash == job_hash)
+    if user_id is not None:
+        query = query.where(Job.user_id == user_id)
+    job = session.execute(query).scalar_one_or_none()
     if not job:
         raise HTTPException(404, "Job not found")
     scores = session.execute(select(Score).where(Score.job_hash == job_hash)).scalars().all()
@@ -106,16 +126,11 @@ async def get_job(job_hash: str, request: Request, session: Session = Depends(ge
         select(ApplicationAttempt).where(ApplicationAttempt.job_hash == job_hash)
     ).scalars().all()
     # Get applied_at date from successful attempts
-    applied_map = _get_applied_map(session, [job_hash])
+    applied_map = _get_applied_map(session, [job_hash], user_id=user_id)
     applied_at = applied_map.get(job_hash)
 
-    # Prev / next neighbours (by collected_at desc, hash desc — same order as the jobs list).
-    # Uses hash as tiebreaker so navigation works even when many jobs share the same timestamp.
-    prev_hash: str | None = None
-    next_hash: str | None = None
-
-    # "prev" = the next newer job (appears *before* current in the DESC list)
-    prev_hash = session.execute(
+    # Prev / next neighbours scoped to user
+    prev_q = (
         select(Job.hash)
         .where(
             or_(
@@ -125,10 +140,8 @@ async def get_job(job_hash: str, request: Request, session: Session = Depends(ge
         )
         .order_by(Job.collected_at.asc(), Job.hash.asc())
         .limit(1)
-    ).scalar_one_or_none()
-
-    # "next" = the next older job (appears *after* current in the DESC list)
-    next_hash = session.execute(
+    )
+    next_q = (
         select(Job.hash)
         .where(
             or_(
@@ -138,7 +151,12 @@ async def get_job(job_hash: str, request: Request, session: Session = Depends(ge
         )
         .order_by(Job.collected_at.desc(), Job.hash.desc())
         .limit(1)
-    ).scalar_one_or_none()
+    )
+    if user_id is not None:
+        prev_q = prev_q.where(Job.user_id == user_id)
+        next_q = next_q.where(Job.user_id == user_id)
+    prev_hash = session.execute(prev_q).scalar_one_or_none()
+    next_hash = session.execute(next_q).scalar_one_or_none()
 
     # Market intelligence boost (safe to call even when tables are empty)
     market_boost: dict[str, Any] = {}
@@ -164,15 +182,19 @@ class BulkStatusUpdate(BaseModel):
 
 
 @router.patch("/api/jobs/bulk/status")
-async def bulk_update_status(body: BulkStatusUpdate, session: Session = Depends(get_db)):
+async def bulk_update_status(body: BulkStatusUpdate, request: Request, session: Session = Depends(get_db)):
     """Update status for multiple jobs in a single transaction."""
+    user_id = _get_user_id(request)
     try:
         new_status = JobStatus(body.status)
     except ValueError:
         raise HTTPException(400, f"Invalid status: {body.status}")
     updated = 0
     for h in body.hashes:
-        job = session.execute(select(Job).where(Job.hash == h)).scalar_one_or_none()
+        query = select(Job).where(Job.hash == h)
+        if user_id is not None:
+            query = query.where(Job.user_id == user_id)
+        job = session.execute(query).scalar_one_or_none()
         if job:
             job.status = new_status
             updated += 1
@@ -185,11 +207,12 @@ class BulkDelete(BaseModel):
 
 
 @router.post("/api/jobs/bulk/delete")
-async def bulk_delete_jobs(body: BulkDelete, session: Session = Depends(get_db)):
+async def bulk_delete_jobs(body: BulkDelete, request: Request, session: Session = Depends(get_db)):
     """Delete multiple jobs in a single transaction."""
+    user_id = _get_user_id(request)
     deleted = 0
     for h in body.hashes:
-        if delete_job(session, h):
+        if delete_job(session, h, user_id=user_id):
             deleted += 1
     return {"deleted": deleted}
 
@@ -197,8 +220,12 @@ async def bulk_delete_jobs(body: BulkDelete, session: Session = Depends(get_db))
 # --- Single job endpoints ---
 
 @router.patch("/api/jobs/{job_hash}/status")
-async def update_job_status(job_hash: str, body: StatusUpdate, session: Session = Depends(get_db)):
-    job = session.execute(select(Job).where(Job.hash == job_hash)).scalar_one_or_none()
+async def update_job_status(job_hash: str, body: StatusUpdate, request: Request, session: Session = Depends(get_db)):
+    user_id = _get_user_id(request)
+    query = select(Job).where(Job.hash == job_hash)
+    if user_id is not None:
+        query = query.where(Job.user_id == user_id)
+    job = session.execute(query).scalar_one_or_none()
     if not job:
         raise HTTPException(404, "Job not found")
     try:
@@ -211,8 +238,9 @@ async def update_job_status(job_hash: str, body: StatusUpdate, session: Session 
 
 
 @router.delete("/api/jobs/{job_hash}")
-async def remove_job(job_hash: str, session: Session = Depends(get_db)):
-    deleted = delete_job(session, job_hash)
+async def remove_job(job_hash: str, request: Request, session: Session = Depends(get_db)):
+    user_id = _get_user_id(request)
+    deleted = delete_job(session, job_hash, user_id=user_id)
     if not deleted:
         raise HTTPException(404, "Job not found")
     return {"deleted": True, "hash": job_hash}
@@ -221,14 +249,19 @@ async def remove_job(job_hash: str, session: Session = Depends(get_db)):
 @router.post("/api/jobs/{job_hash}/reformat")
 async def reformat_description(job_hash: str, request: Request, session: Session = Depends(get_db)):
     """Re-format a job description using LLM for clean Markdown output."""
-    job = session.execute(select(Job).where(Job.hash == job_hash)).scalar_one_or_none()
+    user_id = _get_user_id(request)
+    query = select(Job).where(Job.hash == job_hash)
+    if user_id is not None:
+        query = query.where(Job.user_id == user_id)
+    job = session.execute(query).scalar_one_or_none()
     if not job:
         raise HTTPException(404, "Job not found")
     if not job.description_text:
         raise HTTPException(400, "No description to reformat")
 
-    settings = request.app.state.settings
-    api_key = settings.openai_api_key
+    from job_hunter.web.deps import get_effective_settings
+    eff = get_effective_settings(request)
+    api_key = eff.openai_api_key
     if not api_key:
         raise HTTPException(400, "OpenAI API key not set — go to Settings")
 
@@ -244,13 +277,18 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
     """Trigger Easy Apply for a single job."""
     from fastapi.responses import JSONResponse
 
-    job = session.execute(select(Job).where(Job.hash == job_hash)).scalar_one_or_none()
+    user_id = _get_user_id(request)
+    query = select(Job).where(Job.hash == job_hash)
+    if user_id is not None:
+        query = query.where(Job.user_id == user_id)
+    job = session.execute(query).scalar_one_or_none()
     if not job:
         raise HTTPException(404, "Job not found")
     if not job.url or not job.url.startswith("http"):
         raise HTTPException(400, "Job has no valid LinkedIn URL")
 
-    settings = request.app.state.settings
+    from job_hunter.web.deps import get_effective_settings
+    eff = get_effective_settings(request)
     tm = request.app.state.task_manager
 
     if tm.is_running:
@@ -261,23 +299,25 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
     from job_hunter.linkedin.apply import apply_to_job
 
     engine = request.app.state.engine
+    data_dir = get_user_data_dir(request)
     job_url = job.url
     job_hash_val = job.hash
-    mock = settings.mock
-    dry_run = settings.dry_run
-    headless = settings.headless
-    slowmo_ms = settings.slowmo_ms
+    mock = eff.mock
+    dry_run = eff.dry_run
+    headless = eff.headless
+    slowmo_ms = eff.slowmo_ms
+    captured_user_id = user_id
 
-    resume_path = settings.data_dir / "resume.pdf"
+    resume_path = data_dir / "resume.pdf"
     resume_str = str(resume_path) if resume_path.exists() else "tests/fixtures/resume.txt"
-    cookies_path = str(settings.data_dir / "cookies.json")
+    cookies_path = str(eff.data_dir / "cookies.json")
 
     # Build form answers from user profile
     profile_form_answers: dict[str, str] = {}
     user_profile_dict: dict | None = None
     try:
         from job_hunter.config.loader import load_user_profile
-        user_profile_path = settings.data_dir / "user_profile.yml"
+        user_profile_path = data_dir / "user_profile.yml"
         if user_profile_path.exists():
             user_profile = load_user_profile(user_profile_path)
             profile_form_answers = user_profile.build_form_answers()
@@ -285,7 +325,7 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
     except Exception:
         pass
 
-    api_key = settings.openai_api_key
+    api_key = eff.openai_api_key
 
     async def _run():
         from job_hunter.linkedin.mock_site import MockLinkedInServer
@@ -313,6 +353,7 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
                 job_hash=job_hash_val, result=result_map.get(result["result"], ApplicationResult.FAILED),
                 failure_stage=result.get("failure_stage"),
                 form_answers_json=result.get("form_answers", {}),
+                user_id=captured_user_id,
             )
             save_attempt(sess, attempt)
             status_map = {"success": JobStatus.APPLIED, "dry_run": JobStatus.APPLIED,
@@ -331,5 +372,4 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
 
     tm.start_task("apply", _run())
     return JSONResponse({"started": "apply", "job_hash": job_hash_val}, status_code=202)
-
 

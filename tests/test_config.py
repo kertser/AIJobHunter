@@ -48,7 +48,11 @@ class TestLoadProfiles:
 
 
 class TestLoadSettings:
-    def test_defaults(self) -> None:
+    def test_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Isolate from the real .env file by changing to a directory without one
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("JOBHUNTER_MOCK", raising=False)
+        monkeypatch.delenv("JOBHUNTER_DRY_RUN", raising=False)
         settings = load_settings()
         assert isinstance(settings, AppSettings)
         assert settings.mock is False
@@ -56,13 +60,17 @@ class TestLoadSettings:
         assert settings.headless is True
         assert settings.log_level == LogLevel.INFO
 
-    def test_cli_overrides(self) -> None:
+    def test_cli_overrides(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
         settings = load_settings(mock=True, dry_run=True, log_level=LogLevel.DEBUG)
         assert settings.mock is True
         assert settings.dry_run is True
         assert settings.log_level == LogLevel.DEBUG
 
-    def test_none_overrides_are_ignored(self) -> None:
+    def test_none_overrides_are_ignored(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("JOBHUNTER_MOCK", raising=False)
+        monkeypatch.delenv("JOBHUNTER_DRY_RUN", raising=False)
         settings = load_settings(mock=None, dry_run=None)
         assert settings.mock is False
         assert settings.dry_run is False

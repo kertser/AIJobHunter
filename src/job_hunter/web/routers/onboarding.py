@@ -8,6 +8,7 @@ import logging
 from fastapi import APIRouter, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from job_hunter.web.deps import get_user_data_dir
 from job_hunter.web.task_manager import TaskManager
 
 logger = logging.getLogger("job_hunter.web.onboarding")
@@ -17,11 +18,19 @@ router = APIRouter(tags=["onboarding"])
 @router.get("/onboarding")
 async def onboarding_page(request: Request):
     """Show the onboarding wizard. Indicate if profile already exists."""
-    settings = request.app.state.settings
-    profile_exists = (settings.data_dir / "user_profile.yml").exists()
+    data_dir = get_user_data_dir(request)
+    profile_exists = (data_dir / "user_profile.yml").exists()
     templates = request.app.state.templates
+
+    from job_hunter.web.deps import get_effective_settings
+    eff = get_effective_settings(request)
+    has_api_key = bool(eff.openai_api_key and eff.openai_api_key.strip())
+    is_mock = eff.mock
+
     return templates.TemplateResponse(request, "onboarding.html", {
         "profile_exists": profile_exists,
+        "has_api_key": has_api_key,
+        "is_mock": is_mock,
     })
 
 
@@ -30,9 +39,9 @@ async def generate_profiles(
     request: Request,
     resume: UploadFile = File(...),
     linkedin_url: str = Form(""),
+    openai_api_key: str = Form(""),
 ):
     """Upload resume PDF + optional LinkedIn URL and generate profiles."""
-    settings = request.app.state.settings
     tm: TaskManager = request.app.state.task_manager
 
     if tm.is_running:
@@ -42,8 +51,23 @@ async def generate_profiles(
     if not resume.filename or not resume.filename.lower().endswith(".pdf"):
         return JSONResponse({"error": "Please upload a PDF file"}, status_code=400)
 
-    # Save uploaded resume to data dir
-    data_dir = settings.data_dir
+    # If the user supplied an API key, persist it to their per-user settings
+    submitted_key = openai_api_key.strip()
+    if submitted_key:
+        user = getattr(request.state, "user", None)
+        if user is not None:
+            from job_hunter.auth.repo import update_user_settings
+            from job_hunter.db.repo import make_session
+            session = make_session(request.app.state.engine)
+            try:
+                update_user_settings(session, user.id, openai_api_key=submitted_key)
+                session.commit()
+            finally:
+                session.close()
+            logger.info("Saved OpenAI API key for user %s during onboarding", user.id)
+
+    # Save uploaded resume to per-user data dir
+    data_dir = get_user_data_dir(request)
     data_dir.mkdir(parents=True, exist_ok=True)
     resume_path = data_dir / "resume.pdf"
     content = await resume.read()
@@ -52,9 +76,12 @@ async def generate_profiles(
     resume_path.write_bytes(content)
     logger.info("Saved resume PDF to %s (%d bytes)", resume_path, len(content))
 
-    api_key = settings.openai_api_key
-    mock = settings.mock
-    headless = settings.headless
+    from job_hunter.web.deps import get_effective_settings
+    eff = get_effective_settings(request)
+    # Prefer the just-submitted key (in case effective settings haven't refreshed)
+    api_key = submitted_key or eff.openai_api_key
+    mock = eff.mock
+    headless = eff.headless
     linkedin = linkedin_url.strip() or None
 
     async def _run():
@@ -87,7 +114,7 @@ async def generate_profiles(
         logger.info("Generating profiles via LLM…")
         result = await asyncio.to_thread(generator.generate, extracted)
 
-        # Save results
+        # Save results to per-user data dir
         save_user_profile(result.user_profile, data_dir / "user_profile.yml")
         save_profiles(result.search_profiles, data_dir / "profiles.yml")
         logger.info("Saved user profile and %d search profile(s)", len(result.search_profiles))
@@ -99,5 +126,4 @@ async def generate_profiles(
 
     tm.start_task("onboarding", _run())
     return JSONResponse({"started": "onboarding"}, status_code=202)
-
 

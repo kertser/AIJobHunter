@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login — AI Job Hunter</title>
+  <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <style>
+    body { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: linear-gradient(135deg, #05172b 0%, #2064c6 100%); }
+    .login-card { background: #fff; padding: 2.5rem 2rem; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.25); width: 100%; max-width: 400px; }
+    .login-card h2 { text-align: center; margin-bottom: 0.3rem; }
+    .login-card .subtitle { text-align: center; color: #64748b; font-size: 0.88rem; margin-bottom: 1.5rem; }
+    .login-card input { margin-bottom: 1rem; }
+    .login-card button { width: 100%; }
+    .login-card .alt-link { text-align: center; font-size: 0.85rem; margin-top: 1rem; }
+    .login-card .alt-link a { font-weight: 600; }
+    .error-msg { color: #dc2626; font-size: 0.85rem; text-align: center; margin-bottom: 0.5rem; display: none; }
+    .brand-top { text-align: center; margin-bottom: 1.5rem; }
+    .brand-top img { height: 48px; border-radius: 8px; }
+    .brand-top h1 { color: #fff; font-size: 1.3rem; margin: 0.5rem 0 0; }
+  </style>
+</head>
+<body>
+  <div class="brand-top">
+    <h1>🤖 AI Job Hunter</h1>
+  </div>
+
+  <div class="login-card">
+    <h2>Sign In</h2>
+    <p class="subtitle">Enter your credentials to continue</p>
+
+    <div id="error-msg" class="error-msg"></div>
+
+    <form id="login-form" onsubmit="doLogin(event)">
+      <label>
+        Email
+        <input type="email" name="email" required autofocus placeholder="you@example.com">
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" required placeholder="••••••••" minlength="8">
+      </label>
+      <button type="submit" id="login-btn">🔐 Sign In</button>
+    </form>
+
+    <div class="alt-link">
+      Don't have an account? <a href="/register">Register →</a>
+    </div>
+  </div>
+
+  <script>
+  function doLogin(e) {
+    e.preventDefault();
+    var form = document.getElementById('login-form');
+    var fd = new FormData(form);
+    var btn = document.getElementById('login-btn');
+    var errEl = document.getElementById('error-msg');
+    errEl.style.display = 'none';
+    btn.disabled = true;
+    btn.textContent = '⏳ Signing in…';
+
+    fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        email: fd.get('email'),
+        password: fd.get('password'),
+      })
+    })
+    .then(function(r) {
+      return r.json().then(function(data) {
+        if (r.ok) {
+          window.location.href = '/';
+        } else {
+          errEl.textContent = data.error || 'Login failed';
+          errEl.style.display = 'block';
+          btn.disabled = false;
+          btn.textContent = '🔐 Sign In';
+        }
+      });
+    })
+    .catch(function(err) {
+      errEl.textContent = 'Network error: ' + err;
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = '🔐 Sign In';
+    });
+  }
+  </script>
+</body>
+</html>
+
