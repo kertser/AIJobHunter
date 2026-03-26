@@ -49,6 +49,7 @@ class TaskManager:
         self._log_handler = _TaskLogHandler(self)
         self._result: dict[str, Any] | None = None
         self._recent_events: list[TaskEvent] = []  # buffered for late subscribers
+        self._loop: asyncio.AbstractEventLoop | None = None  # set on start_task
 
     @property
     def is_running(self) -> bool:
@@ -69,6 +70,7 @@ class TaskManager:
         self._task_name = name
         self._result = None
         self._recent_events = []
+        self._loop = asyncio.get_running_loop()
 
         # Install log handler on root job_hunter logger
         root_logger = logging.getLogger("job_hunter")
@@ -104,18 +106,40 @@ class TaskManager:
         return False
 
     def _broadcast(self, event: TaskEvent) -> None:
-        """Push an event to all subscribers and buffer it for late joiners."""
+        """Push an event to all subscribers and buffer it for late joiners.
+
+        Thread-safe: when called from a background thread (e.g. via
+        ``asyncio.to_thread``), uses ``call_soon_threadsafe`` to schedule
+        the queue put on the event loop.
+        """
         self._recent_events.append(event)
+
+        # Detect whether we are on the event-loop thread
+        loop = self._loop
+        on_loop_thread = True
+        if loop is not None:
+            try:
+                running = asyncio.get_running_loop()
+                on_loop_thread = running is loop
+            except RuntimeError:
+                # No running loop → we're in a worker thread
+                on_loop_thread = False
+
         for q in self._subscribers:
             try:
-                q.put_nowait(event)
-            except asyncio.QueueFull:
+                if on_loop_thread or loop is None:
+                    q.put_nowait(event)
+                else:
+                    loop.call_soon_threadsafe(q.put_nowait, event)
+            except (asyncio.QueueFull, RuntimeError):
                 pass
 
     async def subscribe(self) -> AsyncGenerator[TaskEvent, None]:
         """Yield events as they arrive. Use in SSE endpoints.
 
         Late subscribers receive all buffered events from the current task first.
+        Sends keepalive pings every 30 s to prevent connection timeouts during
+        long-running steps (e.g. OpenAI extraction).
         """
         q: asyncio.Queue[TaskEvent] = asyncio.Queue(maxsize=500)
         self._subscribers.append(q)
@@ -127,12 +151,16 @@ class TaskManager:
                     return
 
             while True:
-                event = await asyncio.wait_for(q.get(), timeout=30.0)
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    # No event for 30 s — send a keepalive ping so the
+                    # browser doesn't think the connection died, then loop.
+                    yield TaskEvent(type="ping", message="keepalive")
+                    continue
                 yield event
                 if event.type in ("complete", "task_error"):
                     break
-        except asyncio.TimeoutError:
-            yield TaskEvent(type="ping", message="keepalive")
         except asyncio.CancelledError:
             pass
         finally:

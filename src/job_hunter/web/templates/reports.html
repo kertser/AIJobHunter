@@ -20,7 +20,31 @@
 {% endif %}
 
 <div style="margin-top: 1rem;">
-  <a href="/run" role="button" class="outline">Generate Report →</a>
+  <button id="gen-report-btn" onclick="generateReport()" class="outline">📝 Generate Report</button>
 </div>
+
+<script>
+function generateReport() {
+  var btn = document.getElementById('gen-report-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Generating…';
+  fetch('/api/run/report', { method: 'POST' })
+    .then(function(r) {
+      if (r.ok) {
+        return r.json().then(function(data) {
+          showToast('Report generated for ' + data.date);
+          setTimeout(function() { location.reload(); }, 600);
+        });
+      } else {
+        r.text().then(function(t) { showToast('Error: ' + t); });
+      }
+    })
+    .catch(function(e) { showToast('Error: ' + e); })
+    .finally(function() {
+      btn.disabled = false;
+      btn.textContent = '📝 Generate Report';
+    });
+}
+</script>
 {% endblock %}
 

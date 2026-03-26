@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Request
@@ -149,64 +150,73 @@ async def run_score(request: Request):
     from job_hunter.matching.scoring import compute_score, decide_job_status, decision_to_db
 
     async def _run():
-        session = make_session(engine)
+        def _score_sync():
+            session = make_session(engine)
 
-        user_prefs = params.get("user_preferences")
+            user_prefs = params.get("user_preferences")
 
-        if params["mock"]:
-            embedder = FakeEmbedder(fixed_similarity=0.5)
-            evaluator = FakeLLMEvaluator(fit_score=80, decision="apply")
-        else:
-            api_key = params["openai_api_key"]
-            if not api_key:
-                raise ValueError(
-                    "OpenAI API key not set. Go to Settings and enter your key, "
-                    "or set JOBHUNTER_OPENAI_API_KEY environment variable."
+            if params["mock"]:
+                embedder = FakeEmbedder(fixed_similarity=0.5)
+                evaluator = FakeLLMEvaluator(fit_score=80, decision="apply")
+            else:
+                api_key = params["openai_api_key"]
+                if not api_key:
+                    raise ValueError(
+                        "OpenAI API key not set. Go to Settings and enter your key, "
+                        "or set JOBHUNTER_OPENAI_API_KEY environment variable."
+                    )
+                embedder = OpenAIEmbedder(api_key=api_key)
+                evaluator = OpenAILLMEvaluator(api_key=api_key)
+
+            # Find all jobs that don't have a Score record yet
+            from sqlalchemy import select
+            from job_hunter.db.models import Job
+            all_jobs = session.execute(select(Job)).scalars().all()
+            scored_hashes = set(
+                row[0] for row in session.execute(select(Score.job_hash)).all()
+            )
+            unscored_jobs = [j for j in all_jobs if j.hash not in scored_hashes]
+
+            if not unscored_jobs:
+                session.close()
+                return {"scored": 0, "message": "All jobs already scored"}
+
+            logger.info("Found %d unscored jobs to process", len(unscored_jobs))
+            scored = 0
+            for i, job in enumerate(unscored_jobs, 1):
+                if not job.description_text:
+                    logger.warning("Skipping %s (%s) — no description", job.hash, job.title)
+                    continue
+                logger.info("Scoring job %d/%d: %s at %s", i, len(unscored_jobs), job.title, job.company)
+                result = compute_score(
+                    resume_text=params.get("resume_text", ""),
+                    job_description=job.description_text or "",
+                    embedder=embedder, llm_evaluator=evaluator,
+                    user_preferences=user_prefs,
                 )
-            embedder = OpenAIEmbedder(api_key=api_key)
-            evaluator = OpenAILLMEvaluator(api_key=api_key)
-
-        # Find all jobs that don't have a Score record yet
-        from sqlalchemy import select
-        from job_hunter.db.models import Job
-        all_jobs = session.execute(select(Job)).scalars().all()
-        scored_hashes = set(
-            row[0] for row in session.execute(select(Score.job_hash)).all()
-        )
-        unscored_jobs = [j for j in all_jobs if j.hash not in scored_hashes]
-
-        if not unscored_jobs:
+                score_row = Score(
+                    job_hash=job.hash, embedding_similarity=result["embedding_similarity"],
+                    llm_fit_score=result["llm_fit_score"], missing_skills=result["missing_skills"],
+                    risk_flags=result["risk_flags"], decision=decision_to_db(result["decision"]),
+                )
+                save_score(session, score_row)
+                job.status = decide_job_status(
+                    easy_apply=job.easy_apply, fit_score=result["llm_fit_score"],
+                    similarity=result["embedding_similarity"], decision_str=result["decision"],
+                    min_fit_score=params.get("min_fit_score", 75),
+                    min_similarity=params.get("min_similarity", 0.35),
+                )
+                logger.info(
+                    "  → fit=%d, sim=%.3f, decision=%s",
+                    result["llm_fit_score"], result["embedding_similarity"], result["decision"],
+                )
+                scored += 1
+            session.commit()
             session.close()
-            return {"scored": 0, "message": "All jobs already scored"}
+            return {"scored": scored}
 
-        logger.info("Found %d unscored jobs to process", len(unscored_jobs))
-        scored = 0
-        for job in unscored_jobs:
-            if not job.description_text:
-                logger.warning("Skipping %s (%s) — no description", job.hash, job.title)
-                continue
-            result = compute_score(
-                resume_text=params.get("resume_text", ""),
-                job_description=job.description_text or "",
-                embedder=embedder, llm_evaluator=evaluator,
-                user_preferences=user_prefs,
-            )
-            score_row = Score(
-                job_hash=job.hash, embedding_similarity=result["embedding_similarity"],
-                llm_fit_score=result["llm_fit_score"], missing_skills=result["missing_skills"],
-                risk_flags=result["risk_flags"], decision=decision_to_db(result["decision"]),
-            )
-            save_score(session, score_row)
-            job.status = decide_job_status(
-                easy_apply=job.easy_apply, fit_score=result["llm_fit_score"],
-                similarity=result["embedding_similarity"], decision_str=result["decision"],
-                min_fit_score=params.get("min_fit_score", 75),
-                min_similarity=params.get("min_similarity", 0.35),
-            )
-            scored += 1
-        session.commit()
-        session.close()
-        return {"scored": scored}
+        # Run sync scoring in a thread so SSE progress events stream in real time
+        return await asyncio.to_thread(_score_sync)
 
     tm.start_task("score", _run())
     return JSONResponse({"started": "score"}, status_code=202)
@@ -308,6 +318,91 @@ async def run_pipeline_endpoint(request: Request):
     coro = run_pipeline(**params)
     tm.start_task("pipeline", coro)
     return JSONResponse({"started": "pipeline"}, status_code=202)
+
+
+@router.post("/api/run/market")
+async def run_market(request: Request):
+    """Run the full market intelligence pipeline as a background task."""
+    tm: TaskManager = request.app.state.task_manager
+    settings = request.app.state.settings
+    engine = request.app.state.engine
+    if tm.is_running:
+        return JSONResponse({"error": "A task is already running"}, status_code=409)
+
+    from job_hunter.config.loader import load_user_profile
+    from job_hunter.db.repo import make_session
+    from job_hunter.market.extract import (
+        FakeMarketExtractor,
+        HeuristicExtractor,
+        OpenAIMarketExtractor,
+    )
+    from job_hunter.market.pipeline import run_market_pipeline
+    from job_hunter.market.title_normalizer import (
+        FakeTitleNormalizer,
+        HeuristicTitleNormalizer,
+        OpenAITitleNormalizer,
+    )
+
+    # Choose extractor based on mock mode
+    if settings.mock:
+        extractor = FakeMarketExtractor()
+        title_norm = FakeTitleNormalizer()
+    elif settings.openai_api_key:
+        extractor = OpenAIMarketExtractor(api_key=settings.openai_api_key)
+        title_norm = OpenAITitleNormalizer(api_key=settings.openai_api_key)
+    else:
+        extractor = HeuristicExtractor()
+        title_norm = HeuristicTitleNormalizer()
+
+    # Load user profile if available
+    user_profile = None
+    profile_path = settings.data_dir / "user_profile.yml"
+    if profile_path.exists():
+        try:
+            user_profile = load_user_profile(profile_path)
+        except Exception:
+            pass
+
+    async def _run():
+        session = make_session(engine)
+        try:
+            # run_market_pipeline is synchronous — run in a thread so the
+            # event loop stays free and SSE progress events stream in real time.
+            summary = await asyncio.to_thread(
+                run_market_pipeline,
+                session,
+                extractor=extractor,
+                profile=user_profile,
+                candidate_key="default",
+                title_normalizer=title_norm,
+            )
+            return summary
+        finally:
+            session.close()
+
+    tm.start_task("market", _run())
+    return JSONResponse({"started": "market"}, status_code=202)
+
+
+@router.post("/api/run/report")
+async def run_report(request: Request):
+    """Generate a daily report (fast, no SSE needed)."""
+    settings = request.app.state.settings
+    engine = request.app.state.engine
+
+    from job_hunter.db.repo import make_session
+    from job_hunter.reporting.report import generate_report
+
+    session = make_session(engine)
+    try:
+        summary = generate_report(session=session, data_dir=settings.data_dir)
+        return JSONResponse({
+            "date": summary.get("date"),
+            "md_path": str(summary.get("md_path", "")),
+            "json_path": str(summary.get("json_path", "")),
+        })
+    finally:
+        session.close()
 
 
 @router.get("/api/run/status")

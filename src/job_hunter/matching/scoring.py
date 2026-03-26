@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
+
+from sqlalchemy.orm import Session
 
 from job_hunter.db.models import Decision, JobStatus
 from job_hunter.matching.embeddings import Embedder
@@ -43,6 +46,78 @@ def compute_score(
         "missing_skills": llm_result["missing_skills"],
         "risk_flags": llm_result["risk_flags"],
         "decision": llm_result["decision"],
+    }
+
+
+def compute_market_boost(
+    session: Session,
+    *,
+    job_title: str,
+    candidate_key: str = "default",
+) -> dict[str, Any]:
+    """Compute a market-intelligence boost for a specific job.
+
+    Looks up the best-matching role archetype for *job_title* and returns
+    opportunity signals that can enrich a traditional score.
+
+    Returns a dict with:
+      - ``market_score``: 0.0–1.0 (0.0 when no market data)
+      - ``trend_boost``: float  (positive = hot market)
+      - ``role_key``: matched role archetype or ``""``
+      - ``hard_gaps``: list of critical missing skills
+      - ``learnable_gaps``: list of skills that could be learned
+
+    Safe to call when market tables are empty — returns neutral values.
+    """
+    neutral: dict[str, Any] = {
+        "market_score": 0.0,
+        "trend_boost": 0.0,
+        "role_key": "",
+        "hard_gaps": [],
+        "learnable_gaps": [],
+    }
+
+    try:
+        from job_hunter.market.normalize import canonicalize
+        from job_hunter.market.repo import get_match_explanations
+        from job_hunter.market.opportunity import score_opportunities
+    except Exception:
+        return neutral
+
+    explanations = get_match_explanations(session, candidate_key)
+    if not explanations:
+        return neutral
+
+    # Find the role archetype whose key best matches the job title
+    normalised_title = canonicalize(job_title)
+    best_expl = None
+    best_overlap = 0.0
+
+    for expl in explanations:
+        role_tokens = set(expl.role_key.split("_"))
+        title_tokens = set(normalised_title.split("_"))
+        if not role_tokens or not title_tokens:
+            continue
+        overlap = len(role_tokens & title_tokens) / max(len(role_tokens | title_tokens), 1)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_expl = expl
+
+    if best_expl is None or best_overlap < 0.1:
+        return neutral
+
+    # Compute opportunity score for the matched role
+    opps = score_opportunities(session, candidate_key)
+    opp = next((o for o in opps if o["role_key"] == best_expl.role_key), None)
+    if opp is None:
+        return neutral
+
+    return {
+        "market_score": opp["opportunity_score"],
+        "trend_boost": opp["trend_boost"],
+        "role_key": opp["role_key"],
+        "hard_gaps": opp.get("hard_gaps", []),
+        "learnable_gaps": opp.get("learnable_gaps", []),
     }
 
 

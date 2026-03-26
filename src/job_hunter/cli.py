@@ -19,6 +19,11 @@ app = typer.Typer(
     add_completion=False,
 )
 
+# Register market sub-app
+from job_hunter.market.cli import market_app  # noqa: E402
+
+app.add_typer(market_app)
+
 
 # ---------------------------------------------------------------------------
 # Global state passed through typer.Context

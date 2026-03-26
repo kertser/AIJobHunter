@@ -21,6 +21,10 @@ dependencies = [
     "sse-starlette>=2.0",
     "markdown>=3.10.2",
     "python-dotenv>=1.0",
+    "rapidfuzz>=3.0",
+    "networkx>=3.0",
+    "apscheduler>=3.10,<4",
+    "resend>=2.0",
 ]
 
 [project.scripts]

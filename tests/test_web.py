@@ -18,7 +18,12 @@ from job_hunter.web.app import create_app
 @pytest.fixture()
 def test_app(tmp_path: Path):
     """Create a test app with in-memory DB and sample data."""
-    settings = AppSettings(data_dir=tmp_path, mock=True, dry_run=True, openai_api_key="")
+    settings = AppSettings(
+        data_dir=tmp_path, mock=True, dry_run=True, openai_api_key="",
+        # Ensure test isolation from real .env email settings
+        notification_email="", resend_api_key="", smtp_host="",
+        notifications_enabled=False,
+    )
     # Create a user_profile.yml so dashboard doesn't redirect to onboarding
     (tmp_path / "user_profile.yml").write_text("name: Test User\ntitle: Tester\n")
     app = create_app(settings)
@@ -27,6 +32,8 @@ def test_app(tmp_path: Path):
     engine = get_memory_engine()
     init_db(engine)
     app.state.engine = engine
+    # Point .env persistence to tmp dir so tests don't pollute the real .env
+    app.state.dotenv_path = tmp_path / ".env"
 
     # Seed sample data
     session = make_session(engine)
@@ -249,7 +256,7 @@ class TestRunControls:
     def test_run_page_loads(self, client: TestClient) -> None:
         r = client.get("/run")
         assert r.status_code == 200
-        assert "Run Controls" in r.text
+        assert "Pipeline Controls" in r.text
 
     def test_task_status_api(self, client: TestClient) -> None:
         r = client.get("/api/run/task-status")
@@ -358,5 +365,175 @@ class TestDateColumns:
         r = client.get(f"/api/jobs/{h}")
         assert r.status_code == 200
         assert "Discovered" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Market integration in job detail & dashboard
+# ---------------------------------------------------------------------------
+
+
+class TestMarketIntegration:
+    """Verify market intelligence surfaces in job detail and dashboard."""
+
+    def test_job_detail_shows_market_hint_when_no_data(self, client: TestClient) -> None:
+        """Without market data the job detail should show a 'no data yet' hint."""
+        h = job_hash(external_id="w1", title="Python Dev", company="Acme")
+        r = client.get(f"/api/jobs/{h}")
+        assert r.status_code == 200
+        assert "no data yet" in r.text
+        assert "Market Analysis pipeline" in r.text
+
+    def test_dashboard_market_section_absent_when_empty(self, client: TestClient) -> None:
+        """Dashboard should NOT show market panel when no market data exists."""
+        r = client.get("/")
+        assert r.status_code == 200
+        # The market section heading should not be in the response
+        assert "Market Intelligence" not in r.text
+
+    def test_dashboard_stats_include_market_key(self, client: TestClient) -> None:
+        """Dashboard API should always include a 'market' key (possibly empty)."""
+        r = client.get("/api/stats/dashboard")
+        assert r.status_code == 200
+        data = r.json()
+        assert "market" in data
+
+
+# ---------------------------------------------------------------------------
+# Schedule routes
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleRoutes:
+    def test_schedule_page_loads(self, client: TestClient) -> None:
+        r = client.get("/schedule")
+        assert r.status_code == 200
+        assert "Schedule" in r.text
+
+    def test_schedule_api_get(self, client: TestClient) -> None:
+        r = client.get("/api/schedule")
+        assert r.status_code == 200
+        data = r.json()
+        assert "config" in data
+        assert "next_run" in data
+        assert "history" in data
+        assert isinstance(data["config"], dict)
+        assert "enabled" in data["config"]
+
+    def test_schedule_api_update(self, client: TestClient) -> None:
+        r = client.put("/api/schedule", json={
+            "enabled": True,
+            "time_of_day": "10:30",
+            "days_of_week": ["mon", "wed", "fri"],
+            "pipeline_mode": "market",
+            "profile_name": "my_profile",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["updated"] is True
+
+    def test_schedule_api_update_defaults(self, client: TestClient) -> None:
+        r = client.put("/api/schedule", json={
+            "enabled": False,
+            "time_of_day": "09:00",
+            "days_of_week": [],
+            "pipeline_mode": "full",
+            "profile_name": "default",
+        })
+        assert r.status_code == 200
+        assert r.json()["updated"] is True
+
+    def test_schedule_trigger_disabled(self, client: TestClient) -> None:
+        """Trigger should fail when schedule is disabled (default)."""
+        r = client.post("/api/schedule/trigger")
+        # Default schedule is disabled → 400 or 503
+        assert r.status_code in (400, 503)
+
+    def test_schedule_trigger_task_running(self, client: TestClient) -> None:
+        """Trigger should return 409 if a task is already running."""
+        # First enable the schedule so we don't get 400/503 for disabled
+        client.put("/api/schedule", json={
+            "enabled": True,
+            "time_of_day": "09:00",
+            "days_of_week": ["mon"],
+            "pipeline_mode": "full",
+            "profile_name": "default",
+        })
+        # Monkey-patch is_running to simulate a running task
+        import job_hunter.web.task_manager as tm_mod
+        tm = client.app.state.task_manager
+        original_prop = type(tm).is_running
+        type(tm).is_running = property(lambda self: True)
+        try:
+            r = client.post("/api/schedule/trigger")
+            assert r.status_code == 409
+        finally:
+            type(tm).is_running = original_prop
+
+
+# ---------------------------------------------------------------------------
+# Settings — email notification fields
+# ---------------------------------------------------------------------------
+
+
+class TestSettingsEmail:
+    def test_settings_page_has_email_section(self, client: TestClient) -> None:
+        r = client.get("/settings")
+        assert r.status_code == 200
+        assert "Email Notifications" in r.text
+        assert "smtp_host" in r.text.lower() or "SMTP Host" in r.text
+
+    def test_settings_api_includes_email_fields(self, client: TestClient) -> None:
+        r = client.get("/api/settings")
+        assert r.status_code == 200
+        data = r.json()
+        assert "smtp_host" in data
+        assert "smtp_port" in data
+        assert "notification_email" in data
+        assert "notifications_enabled" in data
+
+    def test_settings_update_email(self, client: TestClient) -> None:
+        r = client.put("/api/settings", json={
+            "smtp_host": "smtp.test.com",
+            "smtp_port": 465,
+            "smtp_user": "user@test.com",
+            "notification_email": "dest@test.com",
+            "notifications_enabled": True,
+        })
+        assert r.status_code == 200
+        # Verify
+        r2 = client.get("/api/settings")
+        data = r2.json()
+        assert data["smtp_host"] == "smtp.test.com"
+        assert data["smtp_port"] == 465
+        assert data["notification_email"] == "dest@test.com"
+        assert data["notifications_enabled"] is True
+
+    def test_test_email_fails_without_config(self, client: TestClient) -> None:
+        """Test email endpoint should fail when nothing is configured."""
+        r = client.post("/api/settings/test-email")
+        assert r.status_code == 400
+        error = r.json().get("error", "")
+        assert "email" in error.lower() or "configured" in error.lower()
+
+    def test_settings_api_includes_resend_fields(self, client: TestClient) -> None:
+        r = client.get("/api/settings")
+        data = r.json()
+        assert "email_provider" in data
+        assert "resend_api_key" in data
+
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+
+class TestHealthCheck:
+    def test_health_endpoint(self, client: TestClient) -> None:
+        r = client.get("/api/health")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "ok"
+        assert "db_ok" in data
+        assert data["db_ok"] is True
 
 
