@@ -65,6 +65,42 @@ def _build_stats(session: Session) -> dict:
         .where(ApplicationAttempt.result == "success")
     ).scalar() or 0
 
+    # ── Market intelligence summary (safe if tables don't exist) ──
+    market_summary: dict = {}
+    try:
+        from job_hunter.market.opportunity import score_opportunities
+        from job_hunter.market.trends.queries import get_latest_snapshots
+        from job_hunter.market.repo import count_entities, count_edges
+
+        entity_count = count_entities(session)
+        edge_count = count_edges(session)
+
+        if entity_count > 0:
+            snapshots = get_latest_snapshots(session, limit=10)
+            rising = [
+                {"name": s.entity.display_name if s.entity else "?", "momentum": round(s.momentum, 2)}
+                for s in snapshots if s.momentum > 0
+            ][:5]
+
+            opps = score_opportunities(session, "default")
+            top_opps = [
+                {
+                    "role": o["role_key"].replace("_", " ").title(),
+                    "score": round(o["opportunity_score"] * 100),
+                    "gaps": len(o.get("hard_gaps", [])),
+                }
+                for o in opps[:3]
+            ]
+
+            market_summary = {
+                "entities": entity_count,
+                "edges": edge_count,
+                "rising": rising,
+                "opportunities": top_opps,
+            }
+    except Exception:
+        pass
+
     return {
         "total_jobs": total,
         "status_counts": status_counts,
@@ -87,6 +123,7 @@ def _build_stats(session: Session) -> dict:
         ],
         "total_attempts": total_attempts,
         "success_attempts": success_attempts,
+        "market": market_summary,
     }
 
 

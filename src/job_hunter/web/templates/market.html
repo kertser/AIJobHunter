@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block title %}Market Intelligence — AI Job Hunter{% endblock %}
+{% block content %}
+<h2>📊 Market Intelligence</h2>
+
+<!-- Stats cards -->
+<div class="cards-grid" style="margin-bottom: 1.5rem;">
+  <div class="card"><p class="stat-number">{{ event_count }}</p><p class="stat-label">Events</p></div>
+  <div class="card"><p class="stat-number">{{ entity_count }}</p><p class="stat-label">Entities</p></div>
+  <div class="card"><p class="stat-number">{{ edge_count }}</p><p class="stat-label">Graph Edges</p></div>
+  <div class="card"><p class="stat-number">{{ snapshot_count }}</p><p class="stat-label">Trend Snapshots</p></div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+  <!-- Top Skills -->
+  <div class="card">
+    <h4>🔧 Top Skills</h4>
+    {% if top_skills %}
+    <table>
+      <thead><tr><th>Skill</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for s in top_skills %}
+        <tr><td>{{ s.display_name }}</td><td>{{ s.count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--pico-muted-color);">No data yet. Run <code>hunt market ingest → extract → graph</code> first.</p>
+    {% endif %}
+  </div>
+
+  <!-- Top Tools -->
+  <div class="card">
+    <h4>🛠️ Top Tools</h4>
+    {% if top_tools %}
+    <table>
+      <thead><tr><th>Tool</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for t in top_tools %}
+        <tr><td>{{ t.display_name }}</td><td>{{ t.count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--pico-muted-color);">No data yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Rising trends -->
+{% if rising %}
+<div class="card" style="margin-top: 1.5rem;">
+  <h4>📈 Rising Trends</h4>
+  <table>
+    <thead><tr><th>Entity</th><th>Type</th><th>Frequency</th><th>Momentum</th></tr></thead>
+    <tbody>
+      {% for r in rising %}
+      <tr>
+        <td>{{ r.display_name }}</td>
+        <td><span class="status-badge status-scored">{{ r.entity_type }}</span></td>
+        <td>{{ r.frequency|int }}</td>
+        <td>{% if r.momentum > 0 %}↑{% elif r.momentum < 0 %}↓{% else %}→{% endif %} {{ r.momentum }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- Top Companies -->
+{% if top_companies %}
+<div class="card" style="margin-top: 1.5rem;">
+  <h4>🏢 Top Companies</h4>
+  <table>
+    <thead><tr><th>Company</th><th>Job Postings</th><th></th></tr></thead>
+    <tbody>
+      {% for c in top_companies %}
+      <tr>
+        <td><strong>{{ c.name }}</strong></td>
+        <td>{{ c.event_count }}</td>
+        <td><a href="/api/market/companies/{{ c.name }}" target="_blank" style="font-size:0.8rem">details →</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- Role Archetypes -->
+{% if role_archetypes %}
+<div class="card" style="margin-top: 1.5rem;">
+  <h4>🎯 Role Archetypes</h4>
+  {% for role in role_archetypes %}
+  <details {% if loop.first %}open{% endif %}>
+    <summary><strong>{{ role.role_key }}</strong> ({{ role.requirements|length }} requirements)</summary>
+    {% if role.requirements %}
+    <table>
+      <thead><tr><th>Requirement</th><th>Type</th><th>Importance</th><th>Confidence</th></tr></thead>
+      <tbody>
+        {% for req in role.requirements %}
+        <tr>
+          <td>{{ req.display_name }}</td>
+          <td><span class="status-badge status-scored">{{ req.entity_type }}</span></td>
+          <td>{{ (req.importance * 100)|int }}%</td>
+          <td>{{ (req.confidence * 100)|int }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </details>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Candidate Capabilities -->
+{% if candidate_capabilities %}
+<div class="card" style="margin-top: 1.5rem;">
+  <h4>👤 Candidate Capabilities</h4>
+  <table>
+    <thead><tr><th>Capability</th><th>Type</th><th>Proficiency</th><th>Confidence</th><th>Transferability</th></tr></thead>
+    <tbody>
+      {% for cap in candidate_capabilities %}
+      <tr>
+        <td>{{ cap.display_name }}</td>
+        <td><span class="status-badge status-scored">{{ cap.entity_type }}</span></td>
+        <td>
+          <div style="background:#e2e8f0;border-radius:4px;height:8px;width:80px;display:inline-block;vertical-align:middle">
+            <div style="background:#2064c6;border-radius:4px;height:8px;width:{{ (cap.proficiency_estimate * 80)|int }}px"></div>
+          </div>
+          {{ (cap.proficiency_estimate * 100)|int }}%
+        </td>
+        <td>{{ (cap.confidence * 100)|int }}%</td>
+        <td>{{ (cap.transferability * 100)|int }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- Opportunity Matches -->
+{% if opportunity_matches %}
+<div class="card" style="margin-top: 1.5rem;">
+  <h4>🏆 Opportunity Matches</h4>
+  <table>
+    <thead><tr><th>Role</th><th>Score</th><th>Confidence</th><th>Learning Upside</th><th>Risk</th><th>Hard Gaps</th></tr></thead>
+    <tbody>
+      {% for m in opportunity_matches %}
+      <tr>
+        <td><strong>{{ m.role_key }}</strong></td>
+        <td>{{ (m.opportunity_score * 100)|int }}%</td>
+        <td>{{ (m.confidence * 100)|int }}%</td>
+        <td>{{ (m.learning_upside * 100)|int }}%</td>
+        <td>{{ (m.mismatch_risk * 100)|int }}%</td>
+        <td>{{ m.hard_gaps|join(', ') or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- Adjacent Roles -->
+{% if adjacent_roles %}
+<div class="card" style="margin-top: 1.5rem;">
+  <h4>🔀 Adjacent Roles</h4>
+  <p style="color: var(--pico-muted-color); font-size: 0.85rem;">Roles reachable via the skill graph that you could transition into.</p>
+  <table>
+    <thead><tr><th>Role</th><th>Proximity</th><th>Hops</th></tr></thead>
+    <tbody>
+      {% for a in adjacent_roles %}
+      <tr>
+        <td>{{ a.display_name }}</td>
+        <td>{{ (a.proximity * 100)|int }}%</td>
+        <td>{{ a.hops }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- API links -->
+<div style="margin-top: 1.5rem;">
+  <details>
+    <summary>API Endpoints</summary>
+    <ul>
+      <li><a href="/api/market/overview"><code>/api/market/overview</code></a> — summary stats (JSON)</li>
+      <li><a href="/api/market/trends"><code>/api/market/trends</code></a> — trend data (JSON)</li>
+      <li><a href="/api/market/entities"><code>/api/market/entities</code></a> — entities by type (JSON)</li>
+      <li><a href="/api/market/roles"><code>/api/market/roles</code></a> — role archetypes (JSON)</li>
+      <li><a href="/api/market/candidate/default"><code>/api/market/candidate/{profile}</code></a> — candidate capabilities (JSON)</li>
+      <li><a href="/api/market/match/default"><code>/api/market/match/{profile}</code></a> — opportunity matches (JSON)</li>
+      <li><code>/api/market/gap/{profile}/{role}</code> — gap analysis for a candidate-role pair (JSON)</li>
+      <li><a href="/api/market/dialogue/sessions"><code>/api/market/dialogue/sessions</code></a> — dialogue sessions (JSON)</li>
+      <li><code>/api/market/dialogue/sessions/{id}</code> — session detail with turns and assessments (JSON)</li>
+    </ul>
+  </details>
+</div>
+{% endblock %}

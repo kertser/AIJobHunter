@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -114,7 +115,9 @@ async def run_pipeline(
         evaluator = OpenAILLMEvaluator(api_key=openai_api_key)
 
     new_jobs = get_jobs_by_status(session, JobStatus.NEW)
-    for job in new_jobs:
+    total_to_score = len(new_jobs)
+    logger.info("Found %d new job(s) to score", total_to_score)
+    for idx, job in enumerate(new_jobs, 1):
         # Blacklist check
         if is_blacklisted(
             company=job.company,
@@ -125,9 +128,15 @@ async def run_pipeline(
             job.status = JobStatus.SKIPPED
             job.notes = "Blacklisted"
             summary["skipped"] += 1
+            logger.info("  [%d/%d] ⏭️ %s at %s — blacklisted", idx, total_to_score, job.title, job.company)
             continue
 
-        result = compute_score(
+        logger.info("  [%d/%d] Scoring: %s at %s", idx, total_to_score, job.title, job.company)
+
+        # Run compute_score in a thread so the event loop stays free
+        # for SSE progress delivery between jobs.
+        result = await asyncio.to_thread(
+            compute_score,
             resume_text=resume_text,
             job_description=job.description_text,
             embedder=embedder,
@@ -164,6 +173,14 @@ async def run_pipeline(
         elif new_status == JobStatus.REVIEW:
             summary["review"] += 1
 
+        logger.info(
+            "    → fit=%d, sim=%.3f, decision=%s → %s",
+            result["llm_fit_score"],
+            result["embedding_similarity"],
+            result["decision"],
+            new_status.value,
+        )
+
     session.commit()
     logger.info("Scored %d jobs", summary["scored"])
 
@@ -174,6 +191,8 @@ async def run_pipeline(
 
     queued_jobs = get_jobs_by_status(session, JobStatus.QUEUED)
     applied_today = count_applied_today(session)
+    total_to_apply = len(queued_jobs)
+    logger.info("Found %d queued job(s) to apply", total_to_apply)
 
     mock_server = None
     if mock and queued_jobs:
@@ -181,11 +200,12 @@ async def run_pipeline(
         base_url = mock_server.start()
 
     try:
-        for job in queued_jobs:
+        for apply_idx, job in enumerate(queued_jobs, 1):
             if not can_apply_today(applied_today=applied_today, max_per_day=max_applications_per_day):
                 logger.info("Daily cap reached (%d). Stopping apply phase.", max_applications_per_day)
                 break
 
+            logger.info("  [%d/%d] Applying: %s at %s", apply_idx, total_to_apply, job.title, job.company)
             job_url = f"{base_url}{job.url}" if mock else job.url
 
             result = await apply_to_job(
@@ -246,7 +266,9 @@ async def run_pipeline(
 
     # --- Phase 4: Report ---
     logger.info("Pipeline step 4/4: Report")
-    report_summary = generate_report(session=session, data_dir=data_dir)
+    report_summary = await asyncio.to_thread(
+        generate_report, session=session, data_dir=data_dir,
+    )
     summary["report_date"] = report_summary.get("date")
     summary["report_md_path"] = report_summary.get("md_path")
     summary["report_json_path"] = report_summary.get("json_path")

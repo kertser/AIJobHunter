@@ -45,6 +45,66 @@
 {% endfor %}
 {% endif %}
 
+{% if market and market.get('market_score', 0) > 0 %}
+<h3>📊 Market Intelligence</h3>
+<div class="card" style="margin-bottom: 1rem; border-left: 4px solid #6366f1;">
+  <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start;">
+    <!-- Market Score Gauge -->
+    <div style="text-align: center; min-width: 100px;">
+      {% set ms = (market.market_score * 100) | round | int %}
+      {% set gauge_color = '#ef4444' if ms < 30 else '#f59e0b' if ms < 60 else '#22c55e' %}
+      <div style="font-size: 2rem; font-weight: 800; color: {{ gauge_color }};">{{ ms }}%</div>
+      <div style="font-size: 0.72rem; color: var(--pico-muted-color); text-transform: uppercase;">Market Fit</div>
+    </div>
+
+    <div style="flex: 1; min-width: 200px;">
+      <p style="margin: 0 0 0.4rem;">
+        <strong>Matched Role:</strong>
+        <kbd style="background: #e0e7ff; color: #4338ca;">{{ market.role_key | replace('_', ' ') | title }}</kbd>
+        {% if market.trend_boost > 0 %}
+        <span style="color: #16a34a; font-weight: 600; margin-left: 0.5rem;" title="Trend momentum boost">📈 +{{ "%.1f"|format(market.trend_boost * 100) }}% trending</span>
+        {% endif %}
+      </p>
+
+      {% if market.hard_gaps %}
+      <p style="margin: 0.3rem 0; font-size: 0.85rem;">
+        <span style="color: #ef4444;">🔴 Hard gaps:</span>
+        {% for g in market.hard_gaps %}<kbd style="background: #fef2f2; color: #dc2626; font-size: 0.75rem;">{{ g }}</kbd> {% endfor %}
+      </p>
+      {% endif %}
+
+      {% if market.learnable_gaps %}
+      <p style="margin: 0.3rem 0; font-size: 0.85rem;">
+        <span style="color: #f59e0b;">🟡 Learnable:</span>
+        {% for g in market.learnable_gaps %}<kbd style="background: #fefce8; color: #a16207; font-size: 0.75rem;">{{ g }}</kbd> {% endfor %}
+      </p>
+      {% endif %}
+
+      {% if not market.hard_gaps and not market.learnable_gaps %}
+      <p style="margin: 0.3rem 0; font-size: 0.85rem; color: #16a34a;">✅ Strong market alignment — no significant gaps detected.</p>
+      {% endif %}
+
+      <p style="margin: 0.5rem 0 0; font-size: 0.72rem; color: var(--pico-muted-color);">
+        Market intelligence from job trend analysis. <a href="/market" style="font-size: 0.72rem;">View full market data →</a>
+      </p>
+    </div>
+  </div>
+</div>
+{% elif market is defined and not market.get('market_score') %}
+<details style="margin-bottom: 1rem;">
+  <summary style="font-size: 0.85rem; color: var(--pico-muted-color); cursor: pointer;">
+    📊 Market Intelligence — <em>no data yet</em>
+  </summary>
+  <div class="card" style="margin-top: 0.3rem;">
+    <p style="font-size: 0.85rem; color: var(--pico-muted-color); margin: 0;">
+      Run the <a href="/run">Market Analysis pipeline</a> to see how this job
+      aligns with market trends, identify skill gaps, and get opportunity scoring
+      based on your profile.
+    </p>
+  </div>
+</details>
+{% endif %}
+
 <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem;">
   <h3 style="margin: 0;">Description</h3>
   {% if job.description_text %}

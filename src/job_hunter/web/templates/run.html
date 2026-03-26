@@ -1,98 +1,311 @@
 {% extends "base.html" %}
 {% block title %}Run — AI Job Hunter{% endblock %}
+{% block extra_head %}
+<style>
+  .run-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.8rem; margin-bottom: 1.5rem; }
+  .run-card { border: 1px solid var(--pico-muted-border-color); border-radius: 10px; padding: 1rem 1.2rem; text-align: center; transition: box-shadow 0.15s; }
+  .run-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+  .run-card h4 { margin: 0 0 0.3rem; font-size: 0.95rem; }
+  .run-card p { font-size: 0.78rem; color: var(--pico-muted-color); margin: 0 0 0.8rem; }
+  .run-card button { width: 100%; }
+  .run-card button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── Progress panel ── */
+  .progress-panel {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 10px; overflow: hidden;
+    background: var(--pico-card-background-color);
+  }
+  .progress-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.7rem 1rem; border-bottom: 1px solid var(--pico-muted-border-color);
+    background: var(--pico-card-background-color);
+  }
+  .progress-header .task-badge {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-weight: 600; font-size: 0.85rem;
+  }
+  .progress-header .elapsed {
+    font-size: 0.78rem; color: var(--pico-muted-color); font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Step tracker ── */
+  .step-tracker {
+    display: flex; gap: 0; padding: 0.5rem 1rem; overflow-x: auto;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+    background: #f8fafc;
+  }
+  [data-theme="dark"] .step-tracker { background: #1e293b; }
+  .step-pip {
+    flex: 1; text-align: center; padding: 0.35rem 0.2rem;
+    font-size: 0.68rem; font-weight: 500; color: var(--pico-muted-color);
+    border-bottom: 3px solid #e2e8f0; transition: all 0.3s;
+    white-space: nowrap; min-width: 0;
+  }
+  [data-theme="dark"] .step-pip { border-bottom-color: #334155; }
+  .step-pip.active { color: #2563eb; border-bottom-color: #2563eb; font-weight: 700; }
+  .step-pip.done { color: #16a34a; border-bottom-color: #16a34a; }
+  .step-pip.done::before { content: '✓ '; }
+
+  /* ── Terminal log ── */
+  .progress-log {
+    background: #0f172a; color: #cbd5e1;
+    font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 0.78rem; line-height: 1.6;
+    padding: 0.8rem 1rem; min-height: 200px; max-height: 450px;
+    overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  .progress-log .log-step { color: #60a5fa; font-weight: 600; }
+  .progress-log .log-ok { color: #4ade80; }
+  .progress-log .log-warn { color: #fbbf24; }
+  .progress-log .log-err { color: #f87171; font-weight: 600; }
+  .progress-log .log-done { color: #34d399; font-weight: 700; }
+  .progress-log .log-dim { color: #64748b; }
+
+  /* ── Status indicator ── */
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .status-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #94a3b8; margin-right: 6px;
+  }
+  .status-dot.running { background: #3b82f6; animation: pulse 1.2s infinite; }
+  .status-dot.done { background: #22c55e; }
+  .status-dot.error { background: #ef4444; }
+</style>
+{% endblock %}
+
 {% block content %}
 <h2>Run Controls</h2>
 
-<div class="cards-grid" style="margin-bottom: 2rem;">
-  <div class="card" style="text-align: center;">
-    <h4>Discover</h4>
-    <p style="font-size: 0.85rem; color: var(--pico-muted-color);">Find new LinkedIn jobs</p>
-    <button onclick="startTask('discover')">&#9654; Discover</button>
+<div class="run-cards">
+  <div class="run-card">
+    <h4>🔍 Discover</h4>
+    <p>Find new LinkedIn jobs</p>
+    <button onclick="startTask('discover')" class="task-btn">▶ Discover</button>
   </div>
-  <div class="card" style="text-align: center;">
-    <h4>Score</h4>
-    <p style="font-size: 0.85rem; color: var(--pico-muted-color);">Score new jobs vs resume</p>
-    <button onclick="startTask('score')">&#9654; Score</button>
+  <div class="run-card">
+    <h4>🎯 Score</h4>
+    <p>Score new jobs vs resume</p>
+    <button onclick="startTask('score')" class="task-btn">▶ Score</button>
   </div>
-  <div class="card" style="text-align: center;">
-    <h4>Apply</h4>
-    <p style="font-size: 0.85rem; color: var(--pico-muted-color);">Apply to queued jobs</p>
-    <button onclick="startTask('apply')">&#9654; Apply</button>
+  <div class="run-card">
+    <h4>⚡ Apply</h4>
+    <p>Apply to queued jobs</p>
+    <button onclick="startTask('apply')" class="task-btn">▶ Apply</button>
   </div>
-  <div class="card" style="text-align: center;">
-    <h4>Full Pipeline</h4>
-    <p style="font-size: 0.85rem; color: var(--pico-muted-color);">Discover, Score, Apply, Report</p>
-    <button onclick="startTask('pipeline')" class="contrast">&#9654; Run All</button>
+  <div class="run-card">
+    <h4>🚀 Full Pipeline</h4>
+    <p>Discover → Score → Apply → Report</p>
+    <button onclick="startTask('pipeline')" class="task-btn contrast">▶ Run All</button>
+  </div>
+  <div class="run-card">
+    <h4>📊 Market Analysis</h4>
+    <p>Ingest → Extract → Graph → Trends → Match</p>
+    <button onclick="startTask('market')" class="task-btn secondary">▶ Analyse Market</button>
   </div>
 </div>
 
-<h3>Progress</h3>
-<div id="task-status" style="margin-bottom: 0.5rem;">
-  {% if task_status.running %}
-    <kbd>Running: {{ task_status.task_name }}</kbd>
-  {% else %}
-    <span style="color: var(--pico-muted-color);">No task running.</span>
-  {% endif %}
+<!-- ═══ Progress panel ═══ -->
+<div class="progress-panel" id="progress-panel">
+  <div class="progress-header">
+    <div class="task-badge" id="task-badge">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="task-label">
+        {% if task_status.running %}Running: {{ task_status.task_name }}{% else %}No task running{% endif %}
+      </span>
+    </div>
+    <span class="elapsed" id="elapsed"></span>
+  </div>
+  <div id="step-tracker" class="step-tracker" style="display: none;"></div>
+  <div class="progress-log" id="progress-log">Waiting for task…</div>
 </div>
-<div id="progress-log">Waiting for task...</div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
   let evtSource = null;
+  let timerStart = null;
+  let timerInterval = null;
+  let stepCount = 0;
+  let currentStep = 0;
+
+  // Step definitions per task type
+  const TASK_STEPS = {
+    discover: ['Search', 'Parse', 'Save'],
+    score:    ['Load', 'Embed', 'Evaluate', 'Save'],
+    apply:    ['Queue', 'Navigate', 'Fill', 'Submit'],
+    pipeline: ['Discover', 'Score', 'Queue', 'Apply', 'Report'],
+    market:   ['Ingest', 'Extract', 'Graph', 'Trends', 'Roles', 'Candidate', 'Match'],
+  };
+
+  function setButtons(disabled) {
+    document.querySelectorAll('.task-btn').forEach(function(b) { b.disabled = disabled; });
+  }
+
+  function startTimer() {
+    timerStart = Date.now();
+    var el = document.getElementById('elapsed');
+    clearInterval(timerInterval);
+    timerInterval = setInterval(function() {
+      var s = Math.floor((Date.now() - timerStart) / 1000);
+      var m = Math.floor(s / 60);
+      s = s % 60;
+      el.textContent = (m > 0 ? m + 'm ' : '') + s + 's';
+    }, 500);
+  }
+
+  function stopTimer() { clearInterval(timerInterval); }
+
+  function buildStepTracker(taskName) {
+    var tracker = document.getElementById('step-tracker');
+    var steps = TASK_STEPS[taskName] || [];
+    if (!steps.length) { tracker.style.display = 'none'; return; }
+    tracker.style.display = 'flex';
+    tracker.innerHTML = '';
+    stepCount = steps.length;
+    currentStep = 0;
+    steps.forEach(function(label, i) {
+      var pip = document.createElement('div');
+      pip.className = 'step-pip';
+      pip.id = 'step-' + i;
+      pip.textContent = label;
+      tracker.appendChild(pip);
+    });
+  }
+
+  function advanceStep(stepIdx) {
+    // Mark previous steps done, current active
+    for (var i = 0; i < stepCount; i++) {
+      var pip = document.getElementById('step-' + i);
+      if (!pip) continue;
+      if (i < stepIdx) pip.className = 'step-pip done';
+      else if (i === stepIdx) pip.className = 'step-pip active';
+      else pip.className = 'step-pip';
+    }
+    currentStep = stepIdx;
+  }
+
+  function completeAllSteps() {
+    for (var i = 0; i < stepCount; i++) {
+      var pip = document.getElementById('step-' + i);
+      if (pip) pip.className = 'step-pip done';
+    }
+  }
+
+  function colorLine(text) {
+    // Detect step headers (━━━ Step N/M: …)
+    if (/^━/.test(text) || /Step \d+\/\d+/.test(text)) {
+      // Extract step number to advance tracker
+      var m = text.match(/Step (\d+)\/(\d+)/);
+      if (m) advanceStep(parseInt(m[1]) - 1);
+      return '<span class="log-step">' + escHtml(text) + '</span>';
+    }
+    if (/^\s*✓|✅/.test(text)) return '<span class="log-ok">' + escHtml(text) + '</span>';
+    if (/completed|complete|done|finished/i.test(text) && /✅/.test(text))
+      return '<span class="log-done">' + escHtml(text) + '</span>';
+    if (/warn|skip/i.test(text)) return '<span class="log-warn">' + escHtml(text) + '</span>';
+    if (/error|fail|❌/i.test(text)) return '<span class="log-err">' + escHtml(text) + '</span>';
+    if (/^Starting /i.test(text)) return '<span class="log-dim">' + escHtml(text) + '</span>';
+    // Per-job scoring progress
+    if (/Scoring job \d+/i.test(text)) return '<span class="log-dim">' + escHtml(text) + '</span>';
+    if (/→.*fit=|→.*sim=/i.test(text)) return '<span class="log-ok">' + escHtml(text) + '</span>';
+    return escHtml(text);
+  }
+
+  function escHtml(t) {
+    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
   function startTask(name) {
-    const log = document.getElementById('progress-log');
-    log.textContent = 'Starting ' + name + '…\n';
-    document.getElementById('task-status').innerHTML = '<kbd>Running: ' + name + '</kbd>';
+    var log = document.getElementById('progress-log');
+    var dot = document.getElementById('status-dot');
+    var label = document.getElementById('task-label');
+    log.innerHTML = '';
+    dot.className = 'status-dot running';
+    label.textContent = 'Running: ' + name;
+    setButtons(true);
+    buildStepTracker(name);
+    startTimer();
 
     // Connect SSE first so we don't miss early events
     if (evtSource) evtSource.close();
     evtSource = new EventSource('/api/run/status');
+
     evtSource.addEventListener('progress', function(e) {
-      log.textContent += e.data + '\n';
+      log.innerHTML += colorLine(e.data) + '\n';
       log.scrollTop = log.scrollHeight;
     });
+
     evtSource.addEventListener('complete', function(e) {
-      log.textContent += '\n✅ Done: ' + e.data + '\n';
-      document.getElementById('task-status').innerHTML = '<span style="color:green">✅ Done</span>';
+      completeAllSteps();
+      log.innerHTML += '\n<span class="log-done">✅ ' + escHtml(e.data) + '</span>\n';
+      log.scrollTop = log.scrollHeight;
+      dot.className = 'status-dot done';
+      label.textContent = '✅ Done — ' + name;
+      setButtons(false);
+      stopTimer();
       evtSource.close();
     });
+
     evtSource.addEventListener('task_error', function(e) {
-      log.textContent += '\n❌ ERROR: ' + e.data + '\n';
-      document.getElementById('task-status').innerHTML = '<span style="color:red">❌ Error</span>';
+      log.innerHTML += '\n<span class="log-err">❌ ' + escHtml(e.data) + '</span>\n';
+      log.scrollTop = log.scrollHeight;
+      dot.className = 'status-dot error';
+      label.textContent = '❌ Error — ' + name;
       showToast('Task failed! Check the progress log.');
+      setButtons(false);
+      stopTimer();
       evtSource.close();
     });
+
+    // Keepalive pings — silently ignored, just keeps the connection alive
+    evtSource.addEventListener('ping', function() { /* keepalive */ });
+
     evtSource.onerror = function() {
-      // SSE connection lost — don't overwrite if we already got a task_error
-      if (document.getElementById('task-status').innerHTML.indexOf('Error') === -1 &&
-          document.getElementById('task-status').innerHTML.indexOf('Done') === -1) {
-        log.textContent += '\n⚠ Connection lost.\n';
-        document.getElementById('task-status').innerHTML = '<span style="color:orange">Disconnected</span>';
+      // EventSource auto-reconnects on transient errors (readyState === CONNECTING).
+      // Only show "Connection lost" if the task wasn't completed or errored
+      // AND the browser has given up reconnecting (readyState === CLOSED).
+      if (evtSource.readyState === EventSource.CLOSED) {
+        if (label.textContent.indexOf('Error') === -1 && label.textContent.indexOf('Done') === -1) {
+          log.innerHTML += '\n<span class="log-warn">⚠ Connection lost.</span>\n';
+          dot.className = 'status-dot error';
+          label.textContent = '⚠ Disconnected';
+          setButtons(false);
+          stopTimer();
+        }
       }
-      evtSource.close();
     };
 
-    // Now fire the POST to start the task
+    // Fire POST to start the task
     fetch('/api/run/' + name, {method: 'POST'}).then(function(r) {
       if (r.status === 409) {
-        log.textContent += '⚠ A task is already running.\n';
+        log.innerHTML += '<span class="log-warn">⚠ A task is already running.</span>\n';
+        setButtons(false);
+        stopTimer();
         evtSource.close();
         return;
       }
       if (!r.ok) {
         r.text().then(function(t) {
-          log.textContent += '❌ Failed to start: ' + t + '\n';
-          document.getElementById('task-status').innerHTML = '<span style="color:red">❌ Failed to start</span>';
+          log.innerHTML += '<span class="log-err">❌ Failed to start: ' + escHtml(t) + '</span>\n';
+          dot.className = 'status-dot error';
+          label.textContent = '❌ Failed to start';
+          setButtons(false);
+          stopTimer();
           evtSource.close();
         });
       }
     }).catch(function(err) {
-      log.textContent += '❌ Network error: ' + err + '\n';
-      document.getElementById('task-status').innerHTML = '<span style="color:red">❌ Network error</span>';
+      log.innerHTML += '<span class="log-err">❌ Network error: ' + escHtml(String(err)) + '</span>\n';
+      dot.className = 'status-dot error';
+      label.textContent = '❌ Network error';
+      setButtons(false);
+      stopTimer();
       evtSource.close();
     });
   }
+
+  // Auto-reconnect if a task was running on page load
   fetch('/api/run/task-status').then(function(r){return r.json()}).then(function(s){
     if(s.running) startTask(s.task_name || 'task');
   });

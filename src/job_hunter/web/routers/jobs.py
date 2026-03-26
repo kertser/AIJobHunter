@@ -108,10 +108,19 @@ async def get_job(job_hash: str, request: Request, session: Session = Depends(ge
     # Get applied_at date from successful attempts
     applied_map = _get_applied_map(session, [job_hash])
     applied_at = applied_map.get(job_hash)
+
+    # Market intelligence boost (safe to call even when tables are empty)
+    market_boost: dict[str, Any] = {}
+    try:
+        from job_hunter.matching.scoring import compute_market_boost
+        market_boost = compute_market_boost(session, job_title=job.title, candidate_key="default")
+    except Exception:
+        pass
+
     templates = request.app.state.templates
     return templates.TemplateResponse(request, "job_detail.html", {
         "job": job, "scores": scores, "attempts": attempts,
-        "applied_at": applied_at,
+        "applied_at": applied_at, "market": market_boost,
     })
 
 

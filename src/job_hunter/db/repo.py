@@ -53,7 +53,12 @@ def get_memory_engine() -> Engine:
 
 
 def init_db(engine: Engine) -> None:
-    """Create all tables defined in the ORM metadata."""
+    """Create all tables defined in the ORM metadata.
+
+    Imports market models so their tables are registered on ``Base.metadata``
+    before ``create_all`` runs.
+    """
+    import job_hunter.market.db_models  # noqa: F401  — register market tables
     Base.metadata.create_all(engine)
 
 

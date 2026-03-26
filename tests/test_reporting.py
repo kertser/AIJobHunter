@@ -173,3 +173,76 @@ class TestGenerateReport:
         assert "| Title |" in md
         assert "| Python Dev |" in md
 
+
+class TestReportWithMarketData:
+    """Reports should include market intelligence when market data exists."""
+
+    def _seed_market(self, session):
+        """Run the full market pipeline on seeded jobs."""
+        from job_hunter.market.events import ingest_jobs
+        from job_hunter.market.extract import HeuristicExtractor, run_extraction
+        from job_hunter.market.graph.builder import build_graph
+        from job_hunter.market.trends.compute import compute_trends
+        from job_hunter.market.role_model import build_role_archetypes
+
+        ingest_jobs(session)
+        session.commit()
+        run_extraction(session, HeuristicExtractor())
+        session.commit()
+        build_graph(session)
+        session.commit()
+        compute_trends(session)
+        session.commit()
+        build_role_archetypes(session, min_group_size=1)
+        session.commit()
+
+    def test_report_includes_market_section(self, tmp_path: Path) -> None:
+        engine = get_memory_engine()
+        init_db(engine)
+        session = make_session(engine)
+        _seed_db(session)
+        self._seed_market(session)
+
+        summary = generate_report(session=session, data_dir=tmp_path, date="2026-03-06")
+        assert "market" in summary
+        assert summary["market"]["entity_count"] > 0
+        assert len(summary["market"]["top_skills"]) > 0
+
+    def test_report_market_section_in_markdown(self, tmp_path: Path) -> None:
+        engine = get_memory_engine()
+        init_db(engine)
+        session = make_session(engine)
+        _seed_db(session)
+        self._seed_market(session)
+
+        generate_report(session=session, data_dir=tmp_path, date="2026-03-06")
+        md = (tmp_path / "reports" / "2026-03-06.md").read_text()
+        assert "Market Intelligence" in md
+        assert "Top Skills" in md
+
+    def test_report_market_section_in_json(self, tmp_path: Path) -> None:
+        engine = get_memory_engine()
+        init_db(engine)
+        session = make_session(engine)
+        _seed_db(session)
+        self._seed_market(session)
+
+        generate_report(session=session, data_dir=tmp_path, date="2026-03-06")
+        data = json.loads((tmp_path / "reports" / "2026-03-06.json").read_text())
+        assert "market" in data
+        assert data["market"]["entity_count"] > 0
+
+    def test_report_without_market_data(self, tmp_path: Path) -> None:
+        """Report without market pipeline run should not have market section."""
+        engine = get_memory_engine()
+        init_db(engine)
+        session = make_session(engine)
+        _seed_db(session)
+
+        summary = generate_report(session=session, data_dir=tmp_path, date="2026-03-07")
+        assert "market" not in summary
+
+        md = (tmp_path / "reports" / "2026-03-07.md").read_text()
+        assert "Market Intelligence" not in md
+
+

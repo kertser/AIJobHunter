@@ -1,0 +1,57 @@
+# Technology aliases for entity normalization.
+# Format: canonical_name: [alias1, alias2, ...]
+
+# Programming languages
+javascript: [js, ecmascript, es6]
+typescript: [ts]
+python: [py, python3]
+"c++": [cpp, "c plus plus"]
+"c#": [csharp, "c sharp"]
+golang: [go lang]
+ruby: [rb]
+
+# Frameworks and libraries
+"node.js": [nodejs, node]
+react: [reactjs, "react.js"]
+angular: [angularjs, "angular.js"]
+vue: [vuejs, "vue.js"]
+"next.js": [nextjs]
+".net": [dotnet, "dot net"]
+"spring boot": [springboot]
+express: [expressjs, "express.js"]
+"scikit-learn": [sklearn]
+
+# Cloud and infrastructure
+"amazon web services": [aws]
+"google cloud platform": [gcp, "google cloud"]
+"microsoft azure": [azure]
+kubernetes: [k8s, kube]
+docker: [containers, containerization]
+
+# Databases
+postgresql: [postgres, psql, pgsql]
+mongodb: [mongo]
+elasticsearch: [elastic]
+dynamodb: [dynamo db]
+"sql server": [mssql, "ms sql"]
+
+# Data and ML
+"machine learning": [ml, "machine-learning"]
+"deep learning": [dl, "deep-learning"]
+"artificial intelligence": [ai, "artificial-intelligence"]
+"natural language processing": [nlp]
+"computer vision": [cv]
+"large language model": [llm, llms]
+
+# DevOps and tools
+"ci/cd": [cicd, "ci cd"]
+rabbitmq: ["rabbit mq"]
+"apache kafka": [kafka]
+graphql: ["graph ql"]
+"rest api": [restful, "restful api"]
+
+# Practices
+"test-driven development": [tdd]
+"behavior-driven development": [bdd]
+microservices: ["micro services", "micro-services"]
+

@@ -247,6 +247,51 @@
   </div>
 </div>
 
+{% if market and market.entities %}
+<!-- ═══ Market Intelligence ═══ -->
+<div class="panel" style="margin-top: 1.2rem; border-left: 4px solid #6366f1;">
+  <h3>🧠 Market Intelligence</h3>
+  <div style="display: flex; gap: 2rem; flex-wrap: wrap; align-items: flex-start;">
+    <!-- Stats -->
+    <div style="min-width: 100px; text-align: center;">
+      <div style="font-size: 1.6rem; font-weight: 800; color: #6366f1;">{{ market.entities }}</div>
+      <div style="font-size: 0.72rem; color: var(--pico-muted-color); text-transform: uppercase;">Entities</div>
+      <div style="font-size: 0.85rem; color: var(--pico-muted-color); margin-top: 0.2rem;">{{ market.edges }} edges</div>
+    </div>
+
+    <!-- Rising trends -->
+    {% if market.rising %}
+    <div style="flex: 1; min-width: 150px;">
+      <div style="font-size: 0.78rem; font-weight: 600; margin-bottom: 0.3rem; color: #16a34a;">📈 Rising Trends</div>
+      {% for t in market.rising %}
+      <div style="display: inline-block; margin: 2px 4px 2px 0;">
+        <kbd style="background: #f0fdf4; color: #166534; font-size: 0.72rem;">{{ t.name }} <span style="font-weight: 700;">+{{ t.momentum }}</span></kbd>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Opportunity matches -->
+    {% if market.opportunities %}
+    <div style="flex: 1; min-width: 150px;">
+      <div style="font-size: 0.78rem; font-weight: 600; margin-bottom: 0.3rem; color: #6366f1;">🎯 Top Opportunities</div>
+      {% for o in market.opportunities %}
+      <div style="font-size: 0.8rem; margin-bottom: 0.2rem;">
+        {% set ocolor = '#ef4444' if o.score < 30 else '#f59e0b' if o.score < 60 else '#22c55e' %}
+        <span style="color: {{ ocolor }}; font-weight: 700;">{{ o.score }}%</span>
+        {{ o.role }}
+        {% if o.gaps > 0 %}<small style="color: var(--pico-muted-color);">({{ o.gaps }} gaps)</small>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  <p style="font-size: 0.72rem; color: var(--pico-muted-color); margin: 0.6rem 0 0;">
+    <a href="/market" style="font-size: 0.72rem;">View full market analysis →</a>
+  </p>
+</div>
+{% endif %}
+
 <!-- ═══ Quick actions ═══ -->
 <div class="quick-actions">
   <a href="/run" role="button" data-tip="Run the full pipeline">▶️ Run Pipeline</a>

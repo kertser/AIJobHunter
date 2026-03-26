@@ -360,3 +360,32 @@ class TestDateColumns:
         assert "Discovered" in r.text
 
 
+# ---------------------------------------------------------------------------
+# Market integration in job detail & dashboard
+# ---------------------------------------------------------------------------
+
+
+class TestMarketIntegration:
+    """Verify market intelligence surfaces in job detail and dashboard."""
+
+    def test_job_detail_shows_market_hint_when_no_data(self, client: TestClient) -> None:
+        """Without market data the job detail should show a 'no data yet' hint."""
+        h = job_hash(external_id="w1", title="Python Dev", company="Acme")
+        r = client.get(f"/api/jobs/{h}")
+        assert r.status_code == 200
+        assert "no data yet" in r.text
+        assert "Market Analysis pipeline" in r.text
+
+    def test_dashboard_market_section_absent_when_empty(self, client: TestClient) -> None:
+        """Dashboard should NOT show market panel when no market data exists."""
+        r = client.get("/")
+        assert r.status_code == 200
+        # The market section heading should not be in the response
+        assert "Market Intelligence" not in r.text
+
+    def test_dashboard_stats_include_market_key(self, client: TestClient) -> None:
+        """Dashboard API should always include a 'market' key (possibly empty)."""
+        r = client.get("/api/stats/dashboard")
+        assert r.status_code == 200
+        data = r.json()
+        assert "market" in data
