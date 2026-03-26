@@ -67,6 +67,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
         app.state.templates.env.filters["markdown"] = _md_filter
 
+        # Global template variables
+        from datetime import datetime as _dt_cls
+        app.state.templates.env.globals["current_year"] = _dt_cls.now().year
+
         # Date formatting filter
         from datetime import datetime as _dt
         def _datefmt(val, fmt: str = "%b %d, %Y") -> str:

@@ -18,7 +18,12 @@ from job_hunter.web.app import create_app
 @pytest.fixture()
 def test_app(tmp_path: Path):
     """Create a test app with in-memory DB and sample data."""
-    settings = AppSettings(data_dir=tmp_path, mock=True, dry_run=True, openai_api_key="")
+    settings = AppSettings(
+        data_dir=tmp_path, mock=True, dry_run=True, openai_api_key="",
+        # Ensure test isolation from real .env email settings
+        notification_email="", resend_api_key="", smtp_host="",
+        notifications_enabled=False,
+    )
     # Create a user_profile.yml so dashboard doesn't redirect to onboarding
     (tmp_path / "user_profile.yml").write_text("name: Test User\ntitle: Tester\n")
     app = create_app(settings)
