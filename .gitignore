@@ -181,3 +181,5 @@ data/reports/
 # Environment secrets
 .env
 
+/agentic_data/Market Intelligence MVP поверх AIJobHunter.pdf
+/agentic_data/AIJobHunter_Market_Intelligence_Plan.md
