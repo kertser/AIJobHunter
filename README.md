@@ -877,7 +877,19 @@ All database tests use in-memory SQLite. Mock discovery tests spin up a local HT
 
 ## Docker Deployment
 
-Run the web GUI in a Docker container:
+### One-command deploy
+
+The included `deploy.sh` script handles the full lifecycle — stop, prune, pull, build, run:
+
+```bash
+chmod +x deploy.sh
+./deploy.sh
+```
+
+This stops any running containers, prunes stale Docker resources, pulls the latest code,
+rebuilds the image, and starts the container on **port 80** with the `data/` volume and `.env` config.
+
+### Docker Compose
 
 ```bash
 # Build and start
@@ -890,19 +902,20 @@ docker compose logs -f
 docker compose down
 ```
 
+### Manual build
+
+```bash
+docker build -t ai-job-hunter .
+docker run -d -p 80:8000 -v ./data:/app/data --env-file .env --restart unless-stopped ai-job-hunter
+```
+
 The container:
-- Exposes port **8000** (web GUI)
+- Exposes the web GUI (default **port 80** via deploy script, **8000** via compose)
 - Mounts `./data` as a volume for persistent storage
 - Reads configuration from `.env`
 - Runs a health check every 30 s at `/api/health`
 - Restarts automatically (`unless-stopped`)
 
-### Custom build
-
-```bash
-docker build -t ai-job-hunter .
-docker run -d -p 8000:8000 -v ./data:/app/data --env-file .env ai-job-hunter
-```
 
 ---
 

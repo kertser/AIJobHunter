@@ -177,6 +177,7 @@ data/*.json
 data/*.yml
 data/debug_*
 data/reports/
+data/users/
 
 # Environment secrets
 .env
