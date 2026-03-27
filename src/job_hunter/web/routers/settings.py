@@ -259,6 +259,7 @@ async def linkedin_login(body: LinkedInLoginRequest, request: Request):
     from job_hunter.web.deps import get_effective_settings
     settings = get_effective_settings(request)
     cookies_path = settings.data_dir / "cookies.json"
+    screenshot_dir = settings.data_dir
 
     # Create a Future the login task will await when verification is needed.
     loop = asyncio.get_running_loop()
@@ -280,6 +281,7 @@ async def linkedin_login(body: LinkedInLoginRequest, request: Request):
             password=body.password,
             headless=True,
             get_verification_code=_get_code,
+            screenshot_dir=screenshot_dir,
         )
         # Clean up
         request.app.state._linkedin_verify_future = None
@@ -306,3 +308,27 @@ async def linkedin_verify(body: LinkedInVerifyRequest, request: Request):
         )
     future.set_result(body.code.strip())
     return {"submitted": True}
+
+
+@router.get("/api/settings/checkpoint-screenshot")
+async def checkpoint_screenshot(request: Request, name: str = "checkpoint_initial"):
+    """Serve a login checkpoint screenshot taken by the remote-login task.
+
+    Query params:
+        name — screenshot filename without path (e.g. ``checkpoint_initial.png``)
+    """
+    from fastapi.responses import FileResponse
+
+    from job_hunter.web.deps import get_effective_settings
+    settings = get_effective_settings(request)
+
+    # Sanitise: only allow simple filenames, must end with .png
+    safe_name = name if name.endswith(".png") else f"{name}.png"
+    if "/" in safe_name or "\\" in safe_name or ".." in safe_name:
+        return JSONResponse({"error": "Invalid filename"}, status_code=400)
+
+    path = settings.data_dir / safe_name
+    if not path.exists():
+        return JSONResponse({"error": "No screenshot available"}, status_code=404)
+    return FileResponse(path, media_type="image/png")
+

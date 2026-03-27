@@ -1551,3 +1551,26 @@ def test_linkedin_verify_no_pending_login(client):
     assert r.status_code == 400
     assert "No login task" in r.json()["error"]
 
+
+def test_checkpoint_screenshot_not_found(client):
+    """GET /api/settings/checkpoint-screenshot returns 404 when no screenshot exists."""
+    r = client.get("/api/settings/checkpoint-screenshot?name=checkpoint_initial.png")
+    assert r.status_code == 404
+
+
+def test_checkpoint_screenshot_serves_file(client, test_app, tmp_path):
+    """GET /api/settings/checkpoint-screenshot serves the PNG file."""
+    # Create a fake screenshot in data_dir
+    png_data = b"\x89PNG\r\n\x1a\nfake"
+    (tmp_path / "checkpoint_initial.png").write_bytes(png_data)
+    r = client.get("/api/settings/checkpoint-screenshot?name=checkpoint_initial.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content == png_data
+
+
+def test_checkpoint_screenshot_rejects_path_traversal(client):
+    """GET /api/settings/checkpoint-screenshot rejects path traversal."""
+    r = client.get("/api/settings/checkpoint-screenshot?name=../../etc/passwd")
+    assert r.status_code == 400
+
