@@ -377,12 +377,11 @@
     var x = Math.round(e.offsetX * scaleX);
     var y = Math.round(e.offsetY * scaleY);
 
-    // Debounce: block further clicks until this one is acknowledged
+    // Debounce: block further clicks briefly
     _clickPending = true;
-    img.style.cursor = 'wait';
-    img.style.opacity = '0.7';
+    img.style.opacity = '0.8';
 
-    _liLog('🖱️ Click at (' + x + ', ' + y + ')');
+    _liLog('🖱️ (' + x + ', ' + y + ')');
 
     fetch('/api/settings/linkedin-click', {
       method: 'POST',
@@ -395,16 +394,16 @@
         }
       });
     }).catch(function(err) {
-      _liLog('Error sending click: ' + err);
+      _liLog('Error: ' + err);
     }).finally(function() {
-      // Re-enable after a short delay — the new screenshot will arrive soon
+      // Re-enable quickly for rapid clicking (image challenges)
       setTimeout(function() {
         _clickPending = false;
         if (_remoteClickMode) {
           img.style.cursor = 'crosshair';
           img.style.opacity = '1';
         }
-      }, 800);
+      }, 300);
     });
   }
 
