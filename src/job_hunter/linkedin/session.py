@@ -138,6 +138,7 @@ class LinkedInSession:
         slowmo_ms: int = 300,
         on_progress: Callable[[str], None] | None = None,
         get_verification_code: Callable[[], Any] | None = None,
+        get_remote_click: Callable[[], Any] | None = None,
         screenshot_dir: Path | None = None,
     ) -> dict[str, str]:
         """Programmatic login for headless / remote-server environments.
@@ -146,10 +147,14 @@ class LinkedInSession:
         2. If LinkedIn presents a verification/checkpoint page and
            *get_verification_code* is provided, it awaits the callable
            (which should return the PIN as a string) and enters it.
-        3. On success, saves cookies and returns ``{"status": "success"}``.
-        4. On verification needed without a callback, returns
+        3. If the checkpoint shows a CAPTCHA that cannot be auto-solved
+           and *get_remote_click* is provided, enters a remote-interaction
+           loop: screenshots are streamed to the UI and the user can click
+           on them to solve the challenge.
+        4. On success, saves cookies and returns ``{"status": "success"}``.
+        5. On verification needed without a callback, returns
            ``{"status": "verification_needed", "hint": "..."}``.
-        5. On failure returns ``{"status": "error", "detail": "..."}``.
+        6. On failure returns ``{"status": "error", "detail": "..."}``.
 
         *on_progress* is called with human-readable status messages (suitable
         for SSE streaming).  Screenshots of checkpoint pages are saved into
@@ -195,6 +200,7 @@ class LinkedInSession:
                     password=password,
                     progress=_progress,
                     get_verification_code=get_verification_code,
+                    get_remote_click=get_remote_click,
                     screenshot_dir=ss_dir,
                 )
             finally:
@@ -211,6 +217,7 @@ class LinkedInSession:
         password: str,
         progress: Callable[[str], None],
         get_verification_code: Callable[[], Any] | None,
+        get_remote_click: Callable[[], Any] | None,
         screenshot_dir: Path,
     ) -> dict[str, str]:
         """Core login logic (extracted for readability)."""
@@ -312,6 +319,21 @@ class LinkedInSession:
                 # or there's an additional verification step — fall through
                 if not self._is_checkpoint(url):
                     progress(f"Page navigated to: {url}")
+
+            # Step 0b: Remote interaction loop — let the user click on
+            # streamed screenshots to solve CAPTCHA / any visual challenge.
+            if not captcha_clicked and get_remote_click is not None:
+                result = await self._remote_interaction_loop(
+                    page, context,
+                    progress=progress,
+                    get_remote_click=get_remote_click,
+                    screenshot_dir=screenshot_dir,
+                )
+                if result is not None:
+                    return result
+                # If the loop returned None, fall through to the
+                # verification-code flow (user may have cancelled or
+                # the loop timed out while still on a checkpoint).
 
             # Step 1: Try to trigger code delivery
             sent = await self._try_trigger_code_send(page, progress)
@@ -432,6 +454,130 @@ class LinkedInSession:
         except Exception as exc:
             logger.warning("Failed to take screenshot: %s", exc)
             return None
+
+    @staticmethod
+    async def _take_viewport_screenshot(
+        page: Any,
+        screenshot_dir: Path,
+        name: str,
+        progress: Callable[[str], None],
+    ) -> Path | None:
+        """Save a viewport-only screenshot (no scrolling).
+
+        Unlike ``_take_screenshot`` this uses ``full_page=False`` so the
+        image dimensions match the viewport exactly (1280×900).  This is
+        essential for the remote-click loop where the frontend needs to
+        translate click coordinates accurately.
+        """
+        try:
+            path = screenshot_dir / f"{name}.png"
+            await asyncio.wait_for(
+                page.screenshot(path=str(path), full_page=False),
+                timeout=10,
+            )
+            progress(f"SCREENSHOT:{name}.png")
+            logger.debug("Viewport screenshot saved: %s", path)
+            return path
+        except Exception as exc:
+            logger.warning("Failed to take viewport screenshot: %s", exc)
+            return None
+
+    async def _remote_interaction_loop(
+        self,
+        page: Any,
+        context: Any,
+        *,
+        progress: Callable[[str], None],
+        get_remote_click: Callable[[], Any],
+        screenshot_dir: Path,
+        max_clicks: int = 50,
+        overall_timeout_s: int = 300,
+    ) -> dict[str, str] | None:
+        """Let the user solve a visual challenge by clicking on screenshots.
+
+        Enters a loop:
+          1. Take a viewport screenshot and stream it to the UI.
+          2. Await ``get_remote_click()`` — should return ``{"x": int, "y": int}``
+             for a click, or ``None`` to cancel.
+          3. Execute the click via ``page.mouse.click(x, y)``.
+          4. Wait for the page to react.
+          5. If the page navigated away from the checkpoint → success.
+          6. Repeat.
+
+        Returns ``{"status": "success"}`` on login, or ``None`` if the loop
+        was cancelled / timed out (caller should fall through to next step).
+        """
+        import time
+
+        progress("REMOTE_CLICK_START")
+        progress(
+            "🖱️ Remote interaction mode — click on the screenshot to solve "
+            "the challenge. Click 'Stop Remote Click' when done."
+        )
+
+        start = time.monotonic()
+        click_count = 0
+
+        while click_count < max_clicks and (time.monotonic() - start) < overall_timeout_s:
+            # 1. Screenshot
+            await self._take_viewport_screenshot(
+                page, screenshot_dir, "remote_click", progress,
+            )
+
+            # 2. Wait for user click
+            try:
+                click_data = get_remote_click()
+                if asyncio.isfuture(click_data) or asyncio.iscoroutine(click_data):
+                    click_data = await asyncio.wait_for(click_data, timeout=120)
+            except asyncio.TimeoutError:
+                progress("⏰ Remote interaction timed out waiting for click.")
+                break
+            except Exception as exc:
+                progress(f"Remote interaction error: {exc}")
+                break
+
+            if click_data is None:
+                progress("Remote interaction cancelled by user.")
+                break
+
+            x = click_data.get("x", 0)
+            y = click_data.get("y", 0)
+            click_count += 1
+            progress(f"🖱️ Clicking at ({x}, {y})… [click #{click_count}]")
+
+            # 3. Execute the click
+            try:
+                await page.mouse.click(x, y)
+            except Exception as exc:
+                progress(f"Click failed: {exc}")
+                continue
+
+            # 4. Wait for page reaction
+            await page.wait_for_timeout(3000)
+
+            # 5. Check if we navigated away from checkpoint
+            url = page.url
+            if self._is_logged_in(url):
+                progress("✅ Login successful! Saving cookies…")
+                await self._save_cookies_from_context(context)
+                progress(f"✅ Saved cookies to {self.cookies_path}")
+                progress("REMOTE_CLICK_STOP")
+                return {"status": "success"}
+
+            if not self._is_checkpoint(url):
+                # Navigated somewhere else — might be feed loading
+                progress(f"Page navigated to: {url} — waiting…")
+                await page.wait_for_timeout(3000)
+                url = page.url
+                if self._is_logged_in(url):
+                    progress("✅ Login successful! Saving cookies…")
+                    await self._save_cookies_from_context(context)
+                    progress(f"✅ Saved cookies to {self.cookies_path}")
+                    progress("REMOTE_CLICK_STOP")
+                    return {"status": "success"}
+
+        progress("REMOTE_CLICK_STOP")
+        return None
 
     @staticmethod
     def _is_logged_in(url: str) -> bool:

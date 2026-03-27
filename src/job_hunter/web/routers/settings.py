@@ -241,6 +241,12 @@ class LinkedInVerifyRequest(BaseModel):
     code: str
 
 
+class LinkedInClickRequest(BaseModel):
+    x: float = 0
+    y: float = 0
+    cancel: bool = False
+
+
 @router.post("/api/settings/linkedin-login")
 async def linkedin_login(body: LinkedInLoginRequest, request: Request):
     """Start a programmatic LinkedIn login as a background task.
@@ -248,7 +254,8 @@ async def linkedin_login(body: LinkedInLoginRequest, request: Request):
     The browser runs headless on the server.  Progress is streamed via SSE
     on ``/api/run/status``.  If LinkedIn requests a verification code the
     task pauses and the client should call ``POST /api/settings/linkedin-verify``
-    with the code.
+    with the code.  If a visual challenge (CAPTCHA) appears, the user can
+    click on the streamed screenshot via ``POST /api/settings/linkedin-click``.
     """
     from job_hunter.web.task_manager import TaskManager
 
@@ -267,6 +274,10 @@ async def linkedin_login(body: LinkedInLoginRequest, request: Request):
     # Stash on app.state so the /linkedin-verify endpoint can resolve it.
     request.app.state._linkedin_verify_future = verify_future
 
+    # Create a Queue for remote click coordinates (CAPTCHA interaction).
+    click_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    request.app.state._linkedin_click_queue = click_queue
+
     from job_hunter.linkedin.session import LinkedInSession
 
     session = LinkedInSession(cookies_path=cookies_path)
@@ -276,15 +287,23 @@ async def linkedin_login(body: LinkedInLoginRequest, request: Request):
             """Return the Future; remote_login will ``await`` it."""
             return verify_future
 
-        result = await session.remote_login(
-            email=body.email,
-            password=body.password,
-            headless=True,
-            get_verification_code=_get_code,
-            screenshot_dir=screenshot_dir,
-        )
-        # Clean up
-        request.app.state._linkedin_verify_future = None
+        async def _get_click() -> dict | None:
+            """Await the next click from the web UI."""
+            return await click_queue.get()
+
+        try:
+            result = await session.remote_login(
+                email=body.email,
+                password=body.password,
+                headless=True,
+                get_verification_code=_get_code,
+                get_remote_click=_get_click,
+                screenshot_dir=screenshot_dir,
+            )
+        finally:
+            # Clean up
+            request.app.state._linkedin_verify_future = None
+            request.app.state._linkedin_click_queue = None
         return result
 
     tm.start_task("linkedin-login", _run())
@@ -308,6 +327,31 @@ async def linkedin_verify(body: LinkedInVerifyRequest, request: Request):
         )
     future.set_result(body.code.strip())
     return {"submitted": True}
+
+
+@router.post("/api/settings/linkedin-click")
+async def linkedin_click(body: LinkedInClickRequest, request: Request):
+    """Send a click to the running remote-interaction loop.
+
+    The frontend translates image click coordinates to the 1280×900 viewport
+    and POSTs them here.  The login task picks them up from the queue and
+    executes the click via Playwright.
+
+    Send ``{"cancel": true}`` to stop the interaction loop.
+    """
+    queue: asyncio.Queue | None = getattr(
+        request.app.state, "_linkedin_click_queue", None,
+    )
+    if queue is None:
+        return JSONResponse(
+            {"error": "No login task is waiting for remote clicks."},
+            status_code=400,
+        )
+    if body.cancel:
+        await queue.put(None)
+        return {"submitted": True, "action": "cancel"}
+    await queue.put({"x": body.x, "y": body.y})
+    return {"submitted": True, "action": "click", "x": body.x, "y": body.y}
 
 
 @router.get("/api/settings/checkpoint-screenshot")
