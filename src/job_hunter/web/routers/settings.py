@@ -228,6 +228,51 @@ async def delete_cookies(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# LinkedIn cookie paste (primary method — user copies li_at from browser)
+# ---------------------------------------------------------------------------
+
+
+class LiAtPasteRequest(BaseModel):
+    li_at: str
+
+
+@router.post("/api/settings/cookies-paste")
+async def paste_li_at_cookie(body: LiAtPasteRequest, request: Request):
+    """Save a LinkedIn session from a pasted ``li_at`` cookie value.
+
+    This is the simplest authentication method: the user copies the ``li_at``
+    cookie value from their browser's DevTools and pastes it here.  We construct
+    a Playwright-compatible cookies JSON file from just that one value — it's
+    the only cookie LinkedIn needs for authenticated API/page access.
+    """
+    value = body.li_at.strip()
+    if not value:
+        return JSONResponse({"error": "Cookie value cannot be empty"}, status_code=400)
+    if len(value) < 10:
+        return JSONResponse(
+            {"error": "Value looks too short to be a valid li_at cookie"},
+            status_code=400,
+        )
+
+    cookies = [
+        {
+            "name": "li_at",
+            "value": value,
+            "domain": ".linkedin.com",
+            "path": "/",
+            "httpOnly": True,
+            "secure": True,
+            "sameSite": "None",
+        },
+    ]
+
+    path = _cookies_path(request)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cookies, indent=2), encoding="utf-8")
+    return {"saved": True}
+
+
+# ---------------------------------------------------------------------------
 # LinkedIn remote login (programmatic, for headless / Docker environments)
 # ---------------------------------------------------------------------------
 

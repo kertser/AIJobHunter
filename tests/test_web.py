@@ -1511,6 +1511,62 @@ def test_cookies_delete(client):
 
 
 # ---------------------------------------------------------------------------
+# LinkedIn Cookie Paste (li_at)
+# ---------------------------------------------------------------------------
+
+
+def test_cookies_paste_valid(client):
+    """POST /api/settings/cookies-paste saves a valid li_at value."""
+    li_at_value = "AQEDAQNhZXhhbXBsZXRva2VudmFsdWVmb3J0ZXN0aW5n" + "x" * 50
+    r = client.post("/api/settings/cookies-paste", json={"li_at": li_at_value})
+    assert r.status_code == 200
+    assert r.json()["saved"] is True
+
+    # Status should show cookies exist
+    r2 = client.get("/api/settings/cookies-status")
+    assert r2.json()["exists"] is True
+
+    # Verify the file contains proper Playwright cookie format
+    import json as _json
+    settings = client.app.state.settings
+    path = settings.data_dir / "cookies.json"
+    cookies = _json.loads(path.read_text())
+    assert len(cookies) == 1
+    assert cookies[0]["name"] == "li_at"
+    assert cookies[0]["value"] == li_at_value
+    assert cookies[0]["domain"] == ".linkedin.com"
+    assert cookies[0]["httpOnly"] is True
+    assert cookies[0]["secure"] is True
+
+
+def test_cookies_paste_empty(client):
+    """POST /api/settings/cookies-paste rejects empty value."""
+    r = client.post("/api/settings/cookies-paste", json={"li_at": ""})
+    assert r.status_code == 400
+    assert "empty" in r.json()["error"].lower()
+
+
+def test_cookies_paste_too_short(client):
+    """POST /api/settings/cookies-paste rejects suspiciously short values."""
+    r = client.post("/api/settings/cookies-paste", json={"li_at": "abc"})
+    assert r.status_code == 400
+    assert "short" in r.json()["error"].lower()
+
+
+def test_cookies_paste_whitespace_trimmed(client):
+    """POST /api/settings/cookies-paste trims whitespace from the value."""
+    li_at_value = "  AQEDAQNhZXhhbXBsZXRva2VudmFsdWVmb3J0ZXN0aW5n" + "x" * 50 + "  "
+    r = client.post("/api/settings/cookies-paste", json={"li_at": li_at_value})
+    assert r.status_code == 200
+
+    import json as _json
+    settings = client.app.state.settings
+    path = settings.data_dir / "cookies.json"
+    cookies = _json.loads(path.read_text())
+    assert cookies[0]["value"] == li_at_value.strip()
+
+
+# ---------------------------------------------------------------------------
 # LinkedIn Remote Login endpoints
 # ---------------------------------------------------------------------------
 
