@@ -374,5 +374,9 @@ async def checkpoint_screenshot(request: Request, name: str = "checkpoint_initia
     path = settings.data_dir / safe_name
     if not path.exists():
         return JSONResponse({"error": "No screenshot available"}, status_code=404)
-    return FileResponse(path, media_type="image/png")
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 

@@ -296,8 +296,20 @@ class LinkedInSession:
             page_text = await self._get_visible_text(page)
             progress(f"Page content: {page_text[:300]}")
 
-            # Go straight to remote interaction if available — the user
-            # needs full control for reCAPTCHA image challenges.
+            # Try automated reCAPTCHA handling first (checkbox + image
+            # challenge).  Returns a result dict on success/error, or
+            # None if the page doesn't contain a reCAPTCHA.
+            recaptcha_result = await self._handle_recaptcha_checkpoint(
+                page, context,
+                progress=progress,
+                get_remote_click=get_remote_click,
+                screenshot_dir=screenshot_dir,
+            )
+            if recaptcha_result is not None:
+                return recaptcha_result
+
+            # Not a reCAPTCHA — try remote interaction for other
+            # visual challenges (e.g. puzzle, slide-to-verify).
             if get_remote_click is not None:
                 result = await self._remote_interaction_loop(
                     page, context,
@@ -308,18 +320,12 @@ class LinkedInSession:
                 if result is not None:
                     return result
 
-                # Remote interaction ended without success.
-                # Re-check URL — user clicks may have navigated.
                 url = page.url
                 if self._is_logged_in(url):
-                    progress("Login successful after challenge! Saving cookies…")
-                    await self._save_cookies_from_context(context)
-                    progress(f"✅ Saved cookies to {self.cookies_path}")
-                    return {"status": "success"}
+                    return await self._save_and_return(context, progress)
 
-                # If there's no code-input field on the page, this is a
-                # visual-only challenge (reCAPTCHA).  Don't fall through to
-                # verification-code waiting — it would hang forever.
+                # If there's no code-input field, this was a visual-only
+                # challenge that couldn't be solved.
                 pin_input = page.locator(
                     'input#input__email_verification_pin, '
                     'input[name="pin"], '
@@ -437,6 +443,159 @@ class LinkedInSession:
 
         progress(f"Unexpected page after verification: {url}")
         return {"status": "error", "detail": f"Unexpected page after verification: {url}"}
+
+    async def _save_and_return(
+        self,
+        context: Any,
+        progress: Callable[[str], None],
+    ) -> dict[str, str]:
+        """Save cookies and return a success dict (DRY helper)."""
+        progress("Login successful! Saving cookies…")
+        await self._save_cookies_from_context(context)
+        progress(f"✅ Saved cookies to {self.cookies_path}")
+        return {"status": "success"}
+
+    async def _handle_recaptcha_checkpoint(
+        self,
+        page: Any,
+        context: Any,
+        *,
+        progress: Callable[[str], None],
+        get_remote_click: Callable[[], Any] | None,
+        screenshot_dir: Path,
+    ) -> dict[str, str] | None:
+        """Detect and solve a reCAPTCHA checkpoint end-to-end.
+
+        The reCAPTCHA checkbox lives inside an iframe from
+        ``google.com/recaptcha/api2/anchor``.  Viewport-coordinate mouse
+        clicks (``page.mouse.click``) cannot reliably target content
+        inside an iframe in headless Chromium, so we use Playwright's
+        **frame-aware locator API** to click the checkbox directly.
+
+        Flow:
+          1. Wait for the reCAPTCHA anchor iframe to appear.
+          2. Click the "I'm not a robot" checkbox via ``frame.locator``.
+          3. Wait for one of three outcomes:
+             a) reCAPTCHA passes (checkbox turns green) → click any
+                submit button and return success.
+             b) Image challenge appears (``bframe`` iframe) → enter
+                the remote-click loop so the user can solve it.
+             c) Page navigates (login success).
+          4. Return a result dict, or ``None`` if this page does not
+             contain a recognisable reCAPTCHA.
+        """
+        import time
+
+        # ── Step 1: locate the reCAPTCHA anchor iframe ──────────────
+        progress("Looking for reCAPTCHA…")
+
+        anchor = None
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            for f in page.frames:
+                furl = f.url or ""
+                if "recaptcha" in furl and "anchor" in furl:
+                    anchor = f
+                    break
+            if anchor:
+                break
+            await page.wait_for_timeout(500)
+
+        if anchor is None:
+            progress("No reCAPTCHA found on this page.")
+            return None  # not a reCAPTCHA – let caller handle
+
+        # ── Step 2: click the checkbox ──────────────────────────────
+        try:
+            cb = anchor.locator("#recaptcha-anchor")
+            await cb.wait_for(state="visible", timeout=10_000)
+            # Short pause so the widget finishes its init animation
+            await page.wait_for_timeout(600)
+            await cb.click()
+            progress("✅ Clicked reCAPTCHA checkbox.")
+        except Exception as exc:
+            progress(f"Could not click reCAPTCHA checkbox: {exc}")
+            return None  # let caller try other strategies
+
+        # ── Step 3: wait for outcome ────────────────────────────────
+        progress("Waiting for reCAPTCHA to process…")
+
+        challenge_detected = False
+        deadline = time.monotonic() + 30
+
+        while time.monotonic() < deadline:
+            await page.wait_for_timeout(1500)
+
+            # Did the page navigate?
+            url = page.url
+            if self._is_logged_in(url):
+                return await self._save_and_return(context, progress)
+            if not self._is_checkpoint(url):
+                # Navigated away from checkpoint but not to feed yet
+                await page.wait_for_timeout(3000)
+                if self._is_logged_in(page.url):
+                    return await self._save_and_return(context, progress)
+                break
+
+            # Image challenge appeared? (bframe iframe)
+            for f in page.frames:
+                furl = f.url or ""
+                if "recaptcha" in furl and "bframe" in furl:
+                    challenge_detected = True
+                    break
+            if challenge_detected:
+                progress("🖼️ Image challenge detected — manual solving required.")
+                break
+
+            # Checkbox turned green? (auto-pass, no image challenge)
+            try:
+                checked = anchor.locator(
+                    '#recaptcha-anchor[aria-checked="true"]'
+                )
+                if await checked.count() > 0:
+                    progress("reCAPTCHA passed without image challenge!")
+                    await self._try_click_submit_after_captcha(page, progress)
+                    await page.wait_for_timeout(5000)
+                    if self._is_logged_in(page.url):
+                        return await self._save_and_return(context, progress)
+                    result = await self._wait_for_post_captcha_navigation(
+                        page, context, progress, screenshot_dir,
+                    )
+                    if result:
+                        return result
+                    break
+            except Exception:
+                pass
+
+        # ── Step 4: image challenge → remote-click loop ─────────────
+        if challenge_detected and get_remote_click is not None:
+            # Let the challenge images fully render
+            await page.wait_for_timeout(2000)
+
+            result = await self._remote_interaction_loop(
+                page, context,
+                progress=progress,
+                get_remote_click=get_remote_click,
+                screenshot_dir=screenshot_dir,
+            )
+            if result is not None:
+                return result
+
+            # Loop ended without explicit success — check one more time
+            if self._is_logged_in(page.url):
+                return await self._save_and_return(context, progress)
+
+        await self._take_screenshot(
+            page, screenshot_dir, "recaptcha_unsolved", progress,
+        )
+        progress("❌ reCAPTCHA challenge was not completed.")
+        return {
+            "status": "error",
+            "detail": (
+                "Security challenge could not be completed. "
+                "Please try again."
+            ),
+        }
 
     @staticmethod
     async def _take_screenshot(
