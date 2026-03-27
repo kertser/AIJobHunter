@@ -191,6 +191,18 @@ class LinkedInSession:
                 ),
             )
             await context.add_init_script(_STEALTH_SCRIPT)
+
+            # Block font downloads — Playwright screenshots wait for fonts
+            # to load and LinkedIn's fonts frequently hang or time out,
+            # making the remote-click loop unusable.
+            async def _block_fonts(route):
+                if route.request.resource_type == "font":
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await context.route("**/*", _block_fonts)
+
             page = await context.new_page()
 
             try:
@@ -409,7 +421,10 @@ class LinkedInSession:
         """
         try:
             path = screenshot_dir / f"{name}.png"
-            await page.screenshot(path=str(path), full_page=True, timeout=10_000)
+            await page.screenshot(
+                path=str(path), full_page=True,
+                timeout=15_000, animations="disabled",
+            )
             progress(f"SCREENSHOT:{name}.png")
             logger.debug("Screenshot saved: %s", path)
             return path
@@ -431,17 +446,22 @@ class LinkedInSession:
         essential for the remote-click loop where the frontend needs to
         translate click coordinates accurately.
         """
+        path = screenshot_dir / f"{name}.png"
         try:
-            path = screenshot_dir / f"{name}.png"
-            await page.screenshot(path=str(path), full_page=False, timeout=10_000)
+            await page.screenshot(
+                path=str(path), full_page=False,
+                timeout=8_000, animations="disabled",
+            )
             progress(f"SCREENSHOT:{name}.png")
             logger.debug("Viewport screenshot saved: %s", path)
             return path
         except Exception as exc:
             logger.warning("Viewport screenshot failed (%s), trying full-page…", exc)
             try:
-                path = screenshot_dir / f"{name}.png"
-                await page.screenshot(path=str(path), full_page=True, timeout=10_000)
+                await page.screenshot(
+                    path=str(path), full_page=True,
+                    timeout=8_000, animations="disabled",
+                )
                 progress(f"SCREENSHOT:{name}.png")
                 return path
             except Exception as exc2:
@@ -646,9 +666,13 @@ class LinkedInSession:
 
         while click_count < max_clicks and (time.monotonic() - start) < overall_timeout_s:
             # 1. Take screenshot — fast, viewport-only
-            await self._take_viewport_screenshot(
+            ss = await self._take_viewport_screenshot(
                 page, screenshot_dir, "remote_click", progress,
             )
+            if ss is None:
+                progress("⚠️ Screenshot failed — retrying in 2s…")
+                await page.wait_for_timeout(2000)
+                continue
 
             # 2. Wait for user click
             try:
