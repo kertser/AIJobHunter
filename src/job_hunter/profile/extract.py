@@ -79,6 +79,16 @@ def extract_text_from_linkedin_url(url: str, *, headless: bool = True) -> str:
 
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+
+            # Detect LinkedIn auth wall / login redirect
+            current_url = page.url
+            if any(kw in current_url for kw in ("/authwall", "/login", "/checkpoint")):
+                raise ValueError(
+                    "LinkedIn redirected to a login page. "
+                    "Public scraping is blocked — upload a LinkedIn PDF export instead, "
+                    "or log in to LinkedIn first via the Settings page."
+                )
+
             # Wait for the main profile content to appear
             page.wait_for_selector("main", timeout=15_000)
 
@@ -153,11 +163,16 @@ def extract_texts(
         source_str = str(linkedin_source)
         parts.append("\n=== LINKEDIN PROFILE ===")
 
-        if _is_linkedin_url(source_str):
-            parts.append(extract_text_from_linkedin_url(source_str, headless=headless))
-        else:
-            # Treat as a file path (PDF)
-            parts.append(extract_text_from_pdf(Path(source_str)))
+        try:
+            if _is_linkedin_url(source_str):
+                parts.append(extract_text_from_linkedin_url(source_str, headless=headless))
+            else:
+                # Treat as a file path (PDF)
+                parts.append(extract_text_from_pdf(Path(source_str)))
+        except Exception as exc:
+            logger.warning("LinkedIn extraction failed, continuing with resume only: %s", exc)
+            # Remove the header we just added
+            parts.pop()
 
     return "\n\n".join(parts)
 
