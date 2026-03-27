@@ -666,17 +666,18 @@ class LinkedInSession:
     ) -> dict[str, str] | None:
         """Let the user solve a visual challenge by clicking on screenshots.
 
-        Enters a loop:
+        Designed for **speed**: each click cycle takes ~2–3 seconds so the
+        user sees near-real-time feedback.
+
+        Loop:
           1. Take a viewport screenshot and stream it to the UI.
-          2. Await ``get_remote_click()`` — should return ``{"x": int, "y": int}``
-             for a click, or ``None`` to cancel.
-          3. Execute the click via ``page.mouse.click(x, y)``.
-          4. Wait for the page to react (poll for navigation up to 15s).
-          5. If the page navigated away from the checkpoint → success.
+          2. Await ``get_remote_click()`` — returns ``{"x", "y"}`` or ``None``.
+          3. Drain any extra queued clicks, keep only the latest.
+          4. Execute the click via ``page.mouse.click(x, y)``.
+          5. Short wait (2s) + quick URL check.
           6. Repeat.
 
-        Returns ``{"status": "success"}`` on login, or ``None`` if the loop
-        was cancelled / timed out (caller should fall through to next step).
+        Returns ``{"status": "success"}`` on login, or ``None`` if cancelled.
         """
         import time
 
@@ -690,7 +691,7 @@ class LinkedInSession:
         click_count = 0
 
         while click_count < max_clicks and (time.monotonic() - start) < overall_timeout_s:
-            # 1. Screenshot
+            # 1. Take screenshot (fast, viewport-only)
             await self._take_viewport_screenshot(
                 page, screenshot_dir, "remote_click", progress,
             )
@@ -711,34 +712,66 @@ class LinkedInSession:
                 progress("Remote interaction cancelled by user.")
                 break
 
-            x = click_data.get("x", 0)
-            y = click_data.get("y", 0)
-            click_count += 1
-            progress(f"🖱️ Clicking at ({x}, {y})… [click #{click_count}]")
+            # 3. Drain stale clicks from queue — keep only the latest.
+            #    The user may have clicked multiple times while we were
+            #    waiting; only the most recent click matters.
+            latest = click_data
+            try:
+                # get_remote_click is a coroutine factory; peek at the queue
+                # by attempting non-blocking gets via asyncio.wait_for(0).
+                while True:
+                    peek = get_remote_click()
+                    if asyncio.isfuture(peek) or asyncio.iscoroutine(peek):
+                        peek = await asyncio.wait_for(peek, timeout=0.05)
+                    if peek is None:
+                        # Cancel signal takes priority
+                        progress("Remote interaction cancelled by user.")
+                        progress("REMOTE_CLICK_STOP")
+                        return None
+                    latest = peek
+            except (asyncio.TimeoutError, Exception):
+                pass  # queue is empty — good
 
-            # 3. Execute the click
+            x = latest.get("x", 0)
+            y = latest.get("y", 0)
+            click_count += 1
+            progress(f"🖱️ Click #{click_count} at ({x}, {y})")
+
+            # 4. Execute the click
             try:
                 await page.mouse.click(x, y)
             except Exception as exc:
                 progress(f"Click failed: {exc}")
                 continue
 
-            # 4. Wait for page reaction — poll for navigation (up to 15s)
-            #    This gives reCAPTCHA time to verify after checkbox click.
-            progress("Waiting for page reaction…")
-            result = await self._wait_for_post_captcha_navigation(
-                page, context, progress, screenshot_dir, timeout_s=15,
-            )
-            if result is not None:
-                progress("REMOTE_CLICK_STOP")
-                return result
+            # 5. Short wait for page reaction — keep it fast
+            await page.wait_for_timeout(2000)
 
-            # 5. Still on checkpoint — check if page changed at all
+            # 6. Quick URL check
             url = page.url
-            if not self._is_checkpoint(url):
-                progress(f"Page navigated to: {url}")
+            if self._is_logged_in(url):
+                progress("✅ Login successful! Saving cookies…")
+                await self._save_cookies_from_context(context)
+                progress(f"✅ Saved cookies to {self.cookies_path}")
                 progress("REMOTE_CLICK_STOP")
-                return None  # fall through to next step
+                return {"status": "success"}
+
+            if not self._is_checkpoint(url):
+                # Page left checkpoint — maybe loading feed
+                progress(f"Page navigated to: {url} — waiting…")
+                await page.wait_for_timeout(3000)
+                url = page.url
+                if self._is_logged_in(url):
+                    progress("✅ Login successful! Saving cookies…")
+                    await self._save_cookies_from_context(context)
+                    progress(f"✅ Saved cookies to {self.cookies_path}")
+                    progress("REMOTE_CLICK_STOP")
+                    return {"status": "success"}
+                # Left checkpoint but not feed — fall through
+                progress("REMOTE_CLICK_STOP")
+                return None
+
+            # Still on checkpoint — loop back for next screenshot + click
 
         progress("REMOTE_CLICK_STOP")
         return None
