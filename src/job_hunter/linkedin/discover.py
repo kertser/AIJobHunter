@@ -462,7 +462,7 @@ async def _discover_real(
     """Run discovery against real LinkedIn using saved cookies."""
     from playwright.async_api import async_playwright
 
-    from job_hunter.linkedin.forms import detect_challenge
+    from job_hunter.linkedin.forms import detect_challenge, try_solve_recaptcha
     from job_hunter.linkedin.session import LinkedInSession, build_search_url
     from job_hunter.utils.rate_limit import RateLimiter
 
@@ -569,7 +569,31 @@ async def _discover_real(
                 # Check for challenge
                 if await detect_challenge(page):
                     logger.warning(
-                        "Visible challenge/captcha detected on search page %d. "
+                        "Challenge/captcha detected on search page %d. "
+                        "Attempting to solve reCAPTCHA…",
+                        page_num + 1,
+                    )
+
+                    # Try clicking the reCAPTCHA checkbox
+                    solved = await try_solve_recaptcha(page, timeout_ms=15_000)
+                    if solved:
+                        logger.info("reCAPTCHA clicked — waiting for page to update…")
+                        await page.wait_for_timeout(5000)
+
+                        # Check if the challenge is gone
+                        if not await detect_challenge(page):
+                            logger.info("reCAPTCHA solved — continuing discovery.")
+                            # Re-navigate to the search page to get fresh results
+                            await page.goto(search_url, wait_until="domcontentloaded", timeout=30_000)
+                            await page.wait_for_timeout(3000)
+
+                            # Verify the challenge is really gone
+                            if not await detect_challenge(page):
+                                continue  # proceed with normal card parsing below
+                            # else: fall through to error
+
+                    logger.warning(
+                        "Could not auto-solve captcha on search page %d. "
                         "Try running with headless=False (Settings → uncheck Headless) "
                         "so you can solve the captcha manually.",
                         page_num + 1,
@@ -669,8 +693,18 @@ async def _discover_real(
                             await page.wait_for_timeout(3000)
 
                         if await detect_challenge(page):
-                            logger.warning("Challenge detected on detail page! Stopping.")
-                            return jobs
+                            logger.warning("Challenge detected on detail page — attempting reCAPTCHA…")
+                            solved = await try_solve_recaptcha(page, timeout_ms=15_000)
+                            if solved:
+                                await page.wait_for_timeout(5000)
+                                if not await detect_challenge(page):
+                                    logger.info("reCAPTCHA solved on detail page — continuing.")
+                                else:
+                                    logger.warning("Challenge persists on detail page. Stopping.")
+                                    return jobs
+                            else:
+                                logger.warning("Could not solve captcha on detail page. Stopping.")
+                                return jobs
 
                         # Click all "Show more" / "… more" / "See more" buttons
                         # to expand truncated description sections

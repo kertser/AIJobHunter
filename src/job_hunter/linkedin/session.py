@@ -281,6 +281,38 @@ class LinkedInSession:
             page_text = await self._get_visible_text(page)
             progress(f"Page content: {page_text[:500]}")
 
+            # Step 0: Try to click reCAPTCHA "I'm not a robot" checkbox
+            from job_hunter.linkedin.forms import try_solve_recaptcha
+            progress("Checking for reCAPTCHA checkbox…")
+            captcha_clicked = await try_solve_recaptcha(page, timeout_ms=15_000)
+            if captcha_clicked:
+                progress("Clicked reCAPTCHA checkbox — waiting for page to proceed…")
+                await page.wait_for_timeout(5000)
+                await self._take_screenshot(page, screenshot_dir, "checkpoint_after_recaptcha", progress)
+
+                # Check if clicking the checkbox resolved the challenge
+                url = page.url
+                if self._is_logged_in(url):
+                    progress("Login successful after reCAPTCHA! Saving cookies…")
+                    await self._save_cookies_from_context(context)
+                    progress(f"✅ Saved cookies to {self.cookies_path}")
+                    return {"status": "success"}
+
+                # The page may have auto-submitted — wait and re-check
+                await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+                await page.wait_for_timeout(3000)
+                url = page.url
+                if self._is_logged_in(url):
+                    progress("Login successful after reCAPTCHA! Saving cookies…")
+                    await self._save_cookies_from_context(context)
+                    progress(f"✅ Saved cookies to {self.cookies_path}")
+                    return {"status": "success"}
+
+                # If still on checkpoint, the CAPTCHA may need an image challenge
+                # or there's an additional verification step — fall through
+                if not self._is_checkpoint(url):
+                    progress(f"Page navigated to: {url}")
+
             # Step 1: Try to trigger code delivery
             sent = await self._try_trigger_code_send(page, progress)
 

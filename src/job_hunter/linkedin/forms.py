@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
 
 from playwright.async_api import Frame, Page
 
@@ -447,5 +447,84 @@ async def detect_challenge(page: PageOrFrame) -> bool:
     except Exception:
         pass
 
+    # Check for a visible reCAPTCHA iframe (indicates a blocking challenge)
+    if await _find_recaptcha_frame(page) is not None:
+        logger.warning("Visible reCAPTCHA iframe detected on page")
+        return True
+
+    return False
+
+
+async def _find_recaptcha_frame(page: PageOrFrame) -> Any | None:
+    """Locate a *visible* reCAPTCHA iframe element on the page.
+
+    Returns the Playwright ``FrameLocator`` for the first visible reCAPTCHA
+    iframe, or ``None`` if none is found.
+    """
+    for iframe_sel in sel.RECAPTCHA_IFRAME_SELECTORS:
+        loc = page.locator(iframe_sel)
+        try:
+            count = await loc.count()
+        except Exception:
+            continue
+        for i in range(count):
+            try:
+                if await loc.nth(i).is_visible():
+                    return page.frame_locator(iframe_sel).nth(i)
+            except Exception:
+                continue
+    return None
+
+
+async def try_solve_recaptcha(
+    page: PageOrFrame,
+    *,
+    timeout_ms: int = 15_000,
+) -> bool:
+    """Attempt to click the reCAPTCHA "I'm not a robot" checkbox.
+
+    The reCAPTCHA widget lives inside an iframe served from Google.
+    This function:
+      1. Finds the visible reCAPTCHA iframe on the page.
+      2. Clicks the checkbox inside it.
+      3. Waits up to *timeout_ms* for the checkbox to become checked
+         (``aria-checked="true"``), which indicates the challenge was
+         passed (simple click-through) or an image challenge appeared.
+
+    Returns ``True`` if the checkbox was clicked (regardless of whether
+    the challenge was fully solved — an image challenge may still appear).
+    Returns ``False`` if no reCAPTCHA iframe was found.
+    """
+    # Step 1: locate the iframe
+    frame_locator = await _find_recaptcha_frame(page)
+    if frame_locator is None:
+        logger.debug("No visible reCAPTCHA iframe found — nothing to click.")
+        return False
+
+    # Step 2: click the checkbox inside the iframe
+    for cb_sel in sel.RECAPTCHA_CHECKBOX_SELECTORS:
+        checkbox = frame_locator.locator(cb_sel)
+        try:
+            if await checkbox.count() > 0 and await checkbox.first.is_visible():
+                logger.info("Clicking reCAPTCHA checkbox (%s)…", cb_sel)
+                await checkbox.first.click()
+
+                # Step 3: wait for the checkbox to become checked
+                try:
+                    await frame_locator.locator(
+                        '[aria-checked="true"], .recaptcha-checkbox-checked'
+                    ).wait_for(state="visible", timeout=timeout_ms)
+                    logger.info("✅ reCAPTCHA checkbox is now checked.")
+                except Exception:
+                    logger.info(
+                        "reCAPTCHA clicked but not yet checked — "
+                        "an image challenge may have appeared."
+                    )
+                return True
+        except Exception as exc:
+            logger.debug("Failed to click reCAPTCHA via %s: %s", cb_sel, exc)
+            continue
+
+    logger.debug("reCAPTCHA iframe found but could not locate the checkbox inside it.")
     return False
 
