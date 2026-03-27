@@ -62,37 +62,58 @@
   <h3>🔗 LinkedIn Session</h3>
   <p style="color: var(--pico-muted-color); font-size: 0.85rem; margin-top: 0;">
     LinkedIn requires an authenticated session for job discovery and applications.
-    Export your cookies from a browser where you're logged in to LinkedIn and upload the JSON file here.
+    The easiest way is to copy the <code>li_at</code> cookie from your browser.
   </p>
 
   <div id="cookies-status" style="margin-bottom: 0.8rem; font-size: 0.9rem;">
     <span id="cookies-indicator">Checking…</span>
   </div>
 
-  <div style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.6rem;">
-    <label style="margin-bottom: 0;">
-      <input type="file" id="cookies-file" accept=".json" style="max-width: 300px;">
-    </label>
-    <button type="button" onclick="uploadCookies()" class="secondary" id="upload-cookies-btn" style="width: auto;">📤 Upload Cookies</button>
-    <button type="button" onclick="deleteCookies()" class="outline secondary" id="delete-cookies-btn" style="width: auto;">🗑️ Delete</button>
+  <!-- ── Primary: Paste li_at cookie ── -->
+  <div style="margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px;">
+    <p style="font-weight: 600; margin: 0 0 0.5rem; font-size: 0.95rem;">🍪 Paste your <code>li_at</code> cookie</p>
+    <div style="font-size: 0.84rem; line-height: 1.6; margin-bottom: 0.8rem; color: var(--pico-muted-color);">
+      <strong>How to get it:</strong>
+      <ol style="margin: 0.3rem 0 0 1.2rem; padding: 0;">
+        <li>Log in to <a href="https://www.linkedin.com" target="_blank" rel="noopener">linkedin.com</a> in your browser</li>
+        <li>Open DevTools (<kbd>F12</kbd> or <kbd>Ctrl+Shift+I</kbd>)</li>
+        <li>Go to <strong>Application</strong> → <strong>Cookies</strong> → <code>https://www.linkedin.com</code></li>
+        <li>Find the <code>li_at</code> cookie and copy its <strong>Value</strong></li>
+      </ol>
+    </div>
+    <div style="display: flex; gap: 0.8rem; align-items: end; flex-wrap: wrap;">
+      <label style="margin-bottom: 0; flex: 1; min-width: 240px;">
+        <code>li_at</code> cookie value
+        <input type="text" id="li-at-value" placeholder="AQEDAQNh…" autocomplete="off"
+               style="font-family: monospace; font-size: 0.85rem;">
+      </label>
+      <button type="button" onclick="saveLiAtCookie()" class="secondary" id="save-liat-btn" style="width: auto;">
+        🔑 Save Cookie
+      </button>
+    </div>
   </div>
 
+  <div style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.6rem;">
+    <button type="button" onclick="deleteCookies()" class="outline secondary" id="delete-cookies-btn" style="width: auto;">🗑️ Delete Session</button>
+  </div>
+
+  <!-- ── Alternative: Upload cookie file ── -->
   <details style="margin-bottom: 1rem; font-size: 0.84rem;">
-    <summary style="cursor: pointer; font-weight: 600; color: var(--pico-primary);">ℹ️ How to export LinkedIn cookies</summary>
+    <summary style="cursor: pointer; font-weight: 600; color: var(--pico-primary);">📁 Alternative: Upload full cookies JSON file</summary>
     <div style="margin-top: 0.5rem; padding: 0.8rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px; line-height: 1.6;">
-      <p><strong>Option A — Browser extension</strong><br>
-        Install a cookie export extension (e.g. <em>Cookie-Editor</em>, <em>EditThisCookie</em>),
-        go to <a href="https://www.linkedin.com" target="_blank" rel="noopener">linkedin.com</a> while logged in,
-        click the extension and export all cookies as JSON.</p>
-      <p><strong>Option B — DevTools</strong><br>
-        Open DevTools → Application → Cookies → <code>https://www.linkedin.com</code>.
-        Copy all cookies into a JSON array of <code>{"name", "value", "domain", "path"}</code> objects.</p>
+      <p>Use a browser extension like <em>Cookie-Editor</em> to export all LinkedIn cookies as JSON and upload the file here.</p>
+      <div style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; margin-top: 0.5rem;">
+        <label style="margin-bottom: 0;">
+          <input type="file" id="cookies-file" accept=".json" style="max-width: 300px;">
+        </label>
+        <button type="button" onclick="uploadCookies()" class="secondary" id="upload-cookies-btn" style="width: auto;">📤 Upload Cookies</button>
+      </div>
     </div>
   </details>
 
   <!-- ═══ Remote Login ═══ -->
   <details style="margin-bottom: 1rem;">
-    <summary style="cursor: pointer; font-weight: 600; color: var(--pico-primary);">🖥️ Remote Login (log in directly from the server)</summary>
+    <summary style="cursor: pointer; font-weight: 600; color: var(--pico-primary);">🖥️ Last resort: Remote Login (log in from the server — may trigger CAPTCHA)</summary>
     <div style="margin-top: 0.5rem; padding: 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px;">
       <p style="color: var(--pico-muted-color); font-size: 0.84rem; margin-top: 0;">
         Log in to LinkedIn using a headless browser on the server.
@@ -282,12 +303,46 @@
         if (data.exists) {
           el.innerHTML = '✅ Cookies loaded <small style="color:var(--pico-muted-color)">(updated ' + data.updated + ')</small>';
         } else {
-          el.innerHTML = '❌ No cookies — upload required';
+          el.innerHTML = '❌ No cookies — paste your <code>li_at</code> cookie above';
         }
       })
       .catch(function() {
         document.getElementById('cookies-indicator').textContent = '⚠️ Could not check status';
       });
+  }
+
+  function saveLiAtCookie() {
+    var input = document.getElementById('li-at-value');
+    var value = (input.value || '').trim();
+    if (!value) {
+      showToast('Please paste your li_at cookie value first.');
+      return;
+    }
+    var btn = document.getElementById('save-liat-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Saving…';
+
+    fetch('/api/settings/cookies-paste', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({li_at: value}),
+    })
+    .then(function(r) {
+      return r.json().then(function(data) {
+        if (r.ok) {
+          showToast('✅ LinkedIn cookie saved!');
+          input.value = '';
+        } else {
+          showToast('❌ ' + (data.error || 'Failed to save cookie'));
+        }
+      });
+    })
+    .catch(function(err) { showToast('Error: ' + err); })
+    .finally(function() {
+      btn.disabled = false;
+      btn.textContent = '🔑 Save Cookie';
+      refreshCookiesStatus();
+    });
   }
 
   function uploadCookies() {
