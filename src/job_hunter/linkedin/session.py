@@ -307,7 +307,38 @@ class LinkedInSession:
                 )
                 if result is not None:
                     return result
-                # Fall through to verification-code flow if user cancelled
+
+                # Remote interaction ended without success.
+                # Re-check URL — user clicks may have navigated.
+                url = page.url
+                if self._is_logged_in(url):
+                    progress("Login successful after challenge! Saving cookies…")
+                    await self._save_cookies_from_context(context)
+                    progress(f"✅ Saved cookies to {self.cookies_path}")
+                    return {"status": "success"}
+
+                # If there's no code-input field on the page, this is a
+                # visual-only challenge (reCAPTCHA).  Don't fall through to
+                # verification-code waiting — it would hang forever.
+                pin_input = page.locator(
+                    'input#input__email_verification_pin, '
+                    'input[name="pin"], '
+                    'input#input__phone_verification_pin, '
+                    'input#input__challenge_response'
+                )
+                if await pin_input.count() == 0:
+                    await self._take_screenshot(
+                        page, screenshot_dir, "challenge_unsolved", progress,
+                    )
+                    progress("❌ Security challenge was not completed.")
+                    return {
+                        "status": "error",
+                        "detail": (
+                            "Security challenge could not be completed. "
+                            "Please try again."
+                        ),
+                    }
+                # Code input exists — fall through to verification-code flow
 
             # Step 1: Try to trigger code delivery
             sent = await self._try_trigger_code_send(page, progress)
@@ -414,13 +445,40 @@ class LinkedInSession:
         name: str,
         progress: Callable[[str], None],
     ) -> Path | None:
-        """Save a full-page screenshot and announce it via progress.
+        """Save a screenshot and announce it via progress.
+
+        Uses CDP ``Page.captureScreenshot`` as the primary method — this
+        captures the current render buffer *instantly* without waiting for
+        fonts, animations, or network idle.  Falls back to Playwright's
+        ``page.screenshot()`` if CDP is unavailable.
 
         The frontend detects the ``SCREENSHOT:<filename>`` marker and
         renders the image via ``/api/settings/checkpoint-screenshot``.
         """
+        import base64 as _b64
+
+        path = screenshot_dir / f"{name}.png"
+
+        # Primary: CDP screenshot — instant, no font/animation waits
         try:
-            path = screenshot_dir / f"{name}.png"
+            cdp = await page.context.new_cdp_session(page)
+            try:
+                result = await cdp.send("Page.captureScreenshot", {
+                    "format": "png",
+                    "captureBeyondViewport": False,
+                })
+                with open(path, "wb") as f:
+                    f.write(_b64.b64decode(result["data"]))
+                progress(f"SCREENSHOT:{name}.png")
+                logger.debug("CDP screenshot saved: %s", path)
+                return path
+            finally:
+                await cdp.detach()
+        except Exception as exc:
+            logger.debug("CDP screenshot unavailable: %s", exc)
+
+        # Fallback: Playwright screenshot (may wait for fonts)
+        try:
             await page.screenshot(
                 path=str(path), full_page=True,
                 timeout=15_000, animations="disabled",
@@ -441,12 +499,35 @@ class LinkedInSession:
     ) -> Path | None:
         """Save a viewport-only screenshot (no scrolling).
 
-        Unlike ``_take_screenshot`` this uses ``full_page=False`` so the
-        image dimensions match the viewport exactly (1280×900).  This is
-        essential for the remote-click loop where the frontend needs to
-        translate click coordinates accurately.
+        Uses CDP ``Page.captureScreenshot`` for near-instant capture
+        that bypasses Playwright's font / animation waiting.  The image
+        dimensions match the viewport exactly (1280×900) which is
+        essential for the remote-click loop where the frontend translates
+        click coordinates.
         """
+        import base64 as _b64
+
         path = screenshot_dir / f"{name}.png"
+
+        # Primary: CDP screenshot — instant, no font/animation waits
+        try:
+            cdp = await page.context.new_cdp_session(page)
+            try:
+                result = await cdp.send("Page.captureScreenshot", {
+                    "format": "png",
+                    "captureBeyondViewport": False,
+                })
+                with open(path, "wb") as f:
+                    f.write(_b64.b64decode(result["data"]))
+                progress(f"SCREENSHOT:{name}.png")
+                logger.debug("CDP viewport screenshot saved: %s", path)
+                return path
+            finally:
+                await cdp.detach()
+        except Exception as exc:
+            logger.debug("CDP screenshot unavailable: %s", exc)
+
+        # Fallback: Playwright screenshot (may wait for fonts)
         try:
             await page.screenshot(
                 path=str(path), full_page=False,
@@ -456,17 +537,8 @@ class LinkedInSession:
             logger.debug("Viewport screenshot saved: %s", path)
             return path
         except Exception as exc:
-            logger.warning("Viewport screenshot failed (%s), trying full-page…", exc)
-            try:
-                await page.screenshot(
-                    path=str(path), full_page=True,
-                    timeout=8_000, animations="disabled",
-                )
-                progress(f"SCREENSHOT:{name}.png")
-                return path
-            except Exception as exc2:
-                logger.warning("Full-page screenshot also failed: %s", exc2)
-                return None
+            logger.warning("Viewport screenshot failed: %s", exc)
+            return None
 
     @staticmethod
     async def _try_captcha_auto_click(
