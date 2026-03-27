@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger("job_hunter.linkedin.session")
 
 LINKEDIN_BASE = "https://www.linkedin.com"
 LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login"
 LINKEDIN_FEED_URL = "https://www.linkedin.com/feed/"
+
+# Stealth init-script shared by all browser contexts
+_STEALTH_SCRIPT = """
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    window.chrome = { runtime: {} };
+"""
 
 
 class LinkedInSession:
@@ -101,7 +110,10 @@ class LinkedInSession:
     def load_cookies(self) -> list[dict[str, Any]]:
         """Load cookies from disk."""
         if not self.has_cookies():
-            raise FileNotFoundError(f"No cookies found at {self.cookies_path}")
+            raise FileNotFoundError(
+                f"No cookies found at {self.cookies_path}. "
+                "Upload cookies via Settings in the web UI, or run 'hunt login' locally."
+            )
         with open(self.cookies_path, encoding="utf-8") as f:
             cookies: list[dict[str, Any]] = json.load(f)
         logger.debug("Loaded %d cookies from %s", len(cookies), self.cookies_path)
@@ -112,6 +124,240 @@ class LinkedInSession:
         self.cookies_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.cookies_path, "w", encoding="utf-8") as f:
             json.dump(cookies, f, indent=2)
+
+    # ------------------------------------------------------------------
+    # Remote (programmatic) login
+    # ------------------------------------------------------------------
+
+    async def remote_login(
+        self,
+        *,
+        email: str,
+        password: str,
+        headless: bool = True,
+        slowmo_ms: int = 300,
+        on_progress: Callable[[str], None] | None = None,
+        get_verification_code: Callable[[], Any] | None = None,
+    ) -> dict[str, str]:
+        """Programmatic login for headless / remote-server environments.
+
+        1. Navigates to the login page and fills credentials.
+        2. If LinkedIn presents a verification/checkpoint page and
+           *get_verification_code* is provided, it awaits the callable
+           (which should return the PIN as a string) and enters it.
+        3. On success, saves cookies and returns ``{"status": "success"}``.
+        4. On verification needed without a callback, returns
+           ``{"status": "verification_needed", "hint": "..."}``.
+        5. On failure returns ``{"status": "error", "detail": "..."}``.
+
+        *on_progress* is called with human-readable status messages (suitable
+        for SSE streaming).
+        """
+        from playwright.async_api import async_playwright
+
+        def _progress(msg: str) -> None:
+            logger.info(msg)
+            if on_progress:
+                on_progress(msg)
+
+        _progress("Launching headless browser…")
+
+        async with async_playwright() as pw:
+            try:
+                browser = await pw.chromium.launch(
+                    headless=headless, slow_mo=slowmo_ms, channel="chrome",
+                )
+            except Exception:
+                browser = await pw.chromium.launch(headless=headless, slow_mo=slowmo_ms)
+
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                locale="en-US",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+            )
+            await context.add_init_script(_STEALTH_SCRIPT)
+            page = await context.new_page()
+
+            try:
+                result = await self._do_remote_login(
+                    page, context,
+                    email=email,
+                    password=password,
+                    progress=_progress,
+                    get_verification_code=get_verification_code,
+                )
+            finally:
+                await browser.close()
+
+        return result
+
+    async def _do_remote_login(
+        self,
+        page: Any,
+        context: Any,
+        *,
+        email: str,
+        password: str,
+        progress: Callable[[str], None],
+        get_verification_code: Callable[[], Any] | None,
+    ) -> dict[str, str]:
+        """Core login logic (extracted for readability)."""
+
+        progress("Navigating to LinkedIn login page…")
+        await page.goto(LINKEDIN_LOGIN_URL, wait_until="domcontentloaded")
+        await page.wait_for_timeout(1500)
+
+        # Fill credentials
+        progress("Entering credentials…")
+        email_input = page.locator('input#username, input[name="session_key"]')
+        pwd_input = page.locator('input#password, input[name="session_password"]')
+
+        if await email_input.count() == 0 or await pwd_input.count() == 0:
+            return {"status": "error", "detail": "Login form not found — LinkedIn may have changed its layout."}
+
+        await email_input.first.fill(email)
+        await pwd_input.first.fill(password)
+
+        # Click sign-in
+        progress("Submitting login form…")
+        submit = page.locator('button[type="submit"], button[data-litms-control-urn*="login-submit"]')
+        if await submit.count() > 0:
+            await submit.first.click()
+        else:
+            await pwd_input.first.press("Enter")
+
+        # Wait for navigation
+        await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+        await page.wait_for_timeout(2000)
+
+        # Check result
+        url = page.url
+
+        # --- SUCCESS: landed on feed / main pages ---
+        if self._is_logged_in(url):
+            progress("Login successful! Saving cookies…")
+            await self._save_cookies_from_context(context)
+            progress(f"✅ Saved cookies to {self.cookies_path}")
+            return {"status": "success"}
+
+        # --- WRONG CREDENTIALS ---
+        error_el = page.locator(
+            '#error-for-password, div[role="alert"], '
+            'div.form__label--error, p.form__label--error'
+        )
+        if await error_el.count() > 0:
+            try:
+                txt = (await error_el.first.text_content() or "").strip()
+            except Exception:
+                txt = ""
+            detail = txt or "Incorrect email or password."
+            progress(f"❌ Login failed: {detail}")
+            return {"status": "error", "detail": detail}
+
+        # --- VERIFICATION / CHECKPOINT ---
+        if self._is_checkpoint(url):
+            progress("LinkedIn is requesting verification…")
+
+            # Try to detect the type of challenge from the page
+            hint = await self._get_checkpoint_hint(page)
+            progress(f"Verification required: {hint}")
+
+            if get_verification_code is not None:
+                # Ask the caller for the code (may await an asyncio.Future)
+                progress("Waiting for verification code…")
+                code = get_verification_code()
+                if asyncio.isfuture(code) or asyncio.iscoroutine(code):
+                    code = await code
+                code = str(code).strip()
+                if not code:
+                    return {"status": "verification_needed", "hint": hint}
+
+                return await self._submit_verification(page, context, code, progress)
+            else:
+                return {"status": "verification_needed", "hint": hint}
+
+        # --- UNKNOWN STATE ---
+        progress(f"Unexpected post-login page: {url}")
+        return {"status": "error", "detail": f"Unexpected page after login: {url}"}
+
+    async def _submit_verification(
+        self,
+        page: Any,
+        context: Any,
+        code: str,
+        progress: Callable[[str], None],
+    ) -> dict[str, str]:
+        """Enter a verification PIN and check result."""
+        progress(f"Entering verification code ({len(code)} chars)…")
+
+        pin_input = page.locator(
+            'input#input__email_verification_pin, '
+            'input[name="pin"], '
+            'input#input__phone_verification_pin, '
+            'input#input__challenge_response'
+        )
+        if await pin_input.count() == 0:
+            return {"status": "error", "detail": "Could not find verification code input field."}
+
+        await pin_input.first.fill(code)
+
+        submit = page.locator('button#email-pin-submit-button, button[type="submit"]')
+        if await submit.count() > 0:
+            await submit.first.click()
+        else:
+            await pin_input.first.press("Enter")
+
+        await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+        await page.wait_for_timeout(2000)
+
+        url = page.url
+        if self._is_logged_in(url):
+            progress("Verification accepted! Saving cookies…")
+            await self._save_cookies_from_context(context)
+            progress(f"✅ Saved cookies to {self.cookies_path}")
+            return {"status": "success"}
+
+        # Check for error on the verification page (wrong code)
+        error_el = page.locator('div[role="alert"], p.form__label--error, div.body__banner--error')
+        if await error_el.count() > 0:
+            try:
+                txt = (await error_el.first.text_content() or "").strip()
+            except Exception:
+                txt = ""
+            detail = txt or "Verification code was incorrect."
+            progress(f"❌ Verification failed: {detail}")
+            return {"status": "error", "detail": detail}
+
+        progress(f"Unexpected page after verification: {url}")
+        return {"status": "error", "detail": f"Unexpected page after verification: {url}"}
+
+    @staticmethod
+    def _is_logged_in(url: str) -> bool:
+        """Check if the URL indicates a successful login."""
+        logged_in_paths = ("/feed", "/jobs", "/messaging", "/mynetwork", "/notifications")
+        return any(f"linkedin.com{p}" in url for p in logged_in_paths)
+
+    @staticmethod
+    def _is_checkpoint(url: str) -> bool:
+        return any(kw in url for kw in ("/checkpoint", "/challenge", "/authwall", "/uas/login-submit"))
+
+    @staticmethod
+    async def _get_checkpoint_hint(page: Any) -> str:
+        """Extract a human-readable hint about what LinkedIn is asking."""
+        try:
+            # Look for a description paragraph
+            desc = page.locator("p.challenge-description, p.rt-checkpoint__message, h1, p.content__primary")
+            if await desc.count() > 0:
+                txt = (await desc.first.text_content() or "").strip()
+                if txt:
+                    return txt[:300]
+        except Exception:
+            pass
+        return "LinkedIn sent a verification code to your email or phone. Enter it below."
 
     async def create_context(
         self,
@@ -134,19 +380,7 @@ class LinkedInSession:
         )
 
         # Stealth: mask automation indicators so LinkedIn doesn't serve guest pages
-        await context.add_init_script("""
-            // Override navigator.webdriver — Playwright sets it to true
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-
-            // Mask automation-related properties
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5],
-            });
-
-            // Chrome runtime stub
-            window.chrome = { runtime: {} };
-        """)
+        await context.add_init_script(_STEALTH_SCRIPT)
 
         await context.add_cookies(cookies)
         logger.info("Browser context created with %d cookies", len(cookies))

@@ -469,7 +469,8 @@ async def _discover_real(
     session = LinkedInSession(cookies_path=cookies_path)
     if not session.has_cookies():
         raise FileNotFoundError(
-            f"No cookies found at {cookies_path}. Run 'hunt login' first."
+            f"No cookies found at {cookies_path}. "
+            "Upload cookies via Settings in the web UI, or run 'hunt login' locally."
         )
 
     rate = RateLimiter(min_delay_ms=2000, max_delay_ms=5000)

@@ -58,6 +58,86 @@
 
   <hr style="margin: 1.5rem 0;">
 
+  <!-- ═══ LinkedIn Cookies ═══ -->
+  <h3>🔗 LinkedIn Session</h3>
+  <p style="color: var(--pico-muted-color); font-size: 0.85rem; margin-top: 0;">
+    LinkedIn requires an authenticated session for job discovery and applications.
+    Export your cookies from a browser where you're logged in to LinkedIn and upload the JSON file here.
+  </p>
+
+  <div id="cookies-status" style="margin-bottom: 0.8rem; font-size: 0.9rem;">
+    <span id="cookies-indicator">Checking…</span>
+  </div>
+
+  <div style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.6rem;">
+    <label style="margin-bottom: 0;">
+      <input type="file" id="cookies-file" accept=".json" style="max-width: 300px;">
+    </label>
+    <button type="button" onclick="uploadCookies()" class="secondary" id="upload-cookies-btn" style="width: auto;">📤 Upload Cookies</button>
+    <button type="button" onclick="deleteCookies()" class="outline secondary" id="delete-cookies-btn" style="width: auto;">🗑️ Delete</button>
+  </div>
+
+  <details style="margin-bottom: 1rem; font-size: 0.84rem;">
+    <summary style="cursor: pointer; font-weight: 600; color: var(--pico-primary);">ℹ️ How to export LinkedIn cookies</summary>
+    <div style="margin-top: 0.5rem; padding: 0.8rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px; line-height: 1.6;">
+      <p><strong>Option A — Browser extension</strong><br>
+        Install a cookie export extension (e.g. <em>Cookie-Editor</em>, <em>EditThisCookie</em>),
+        go to <a href="https://www.linkedin.com" target="_blank" rel="noopener">linkedin.com</a> while logged in,
+        click the extension and export all cookies as JSON.</p>
+      <p><strong>Option B — DevTools</strong><br>
+        Open DevTools → Application → Cookies → <code>https://www.linkedin.com</code>.
+        Copy all cookies into a JSON array of <code>{"name", "value", "domain", "path"}</code> objects.</p>
+    </div>
+  </details>
+
+  <!-- ═══ Remote Login ═══ -->
+  <details style="margin-bottom: 1rem;">
+    <summary style="cursor: pointer; font-weight: 600; color: var(--pico-primary);">🖥️ Remote Login (log in directly from the server)</summary>
+    <div style="margin-top: 0.5rem; padding: 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px;">
+      <p style="color: var(--pico-muted-color); font-size: 0.84rem; margin-top: 0;">
+        Log in to LinkedIn using a headless browser on the server.
+        Use this when you can't export cookies from a local browser (e.g. Docker deployment).
+        <strong>LinkedIn may require a verification code</strong> sent to your email or phone.
+      </p>
+
+      <div class="grid" style="margin-bottom: 0.5rem;">
+        <label>
+          LinkedIn Email
+          <input type="email" id="li-email" placeholder="you@example.com" autocomplete="username">
+        </label>
+        <label>
+          LinkedIn Password
+          <input type="password" id="li-password" placeholder="••••••••" autocomplete="current-password">
+        </label>
+      </div>
+
+      <div id="li-verify-section" style="display: none; margin-bottom: 0.8rem;">
+        <label>
+          Verification Code
+          <input type="text" id="li-verify-code" placeholder="6-digit code from your email or phone"
+                 style="max-width: 300px;" autocomplete="one-time-code">
+        </label>
+        <button type="button" onclick="submitVerifyCode()" class="secondary" id="li-verify-btn" style="width: auto;">
+          ✅ Submit Code
+        </button>
+      </div>
+
+      <div style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap;">
+        <button type="button" onclick="startRemoteLogin()" class="secondary" id="li-login-btn" style="width: auto;">
+          🔑 Log In to LinkedIn
+        </button>
+      </div>
+
+      <div id="li-login-log"
+           style="display:none; margin-top: 0.8rem; max-height: 200px; overflow-y: auto;
+                  background: var(--pico-card-background-color); border: 1px solid var(--pico-muted-border-color);
+                  border-radius: 6px; padding: 0.6rem; font-family: monospace; font-size: 0.78rem; white-space: pre-wrap;">
+      </div>
+    </div>
+  </details>
+
+  <hr style="margin: 1.5rem 0;">
+
   <!-- ═══ Email Notifications ═══ -->
   <h3>📧 Email Notifications</h3>
   <p style="color: var(--pico-muted-color); font-size: 0.85rem; margin-top: 0;">
@@ -160,6 +240,179 @@
 
 {% block extra_scripts %}
 <script>
+  /* ── LinkedIn Cookies ─────────────────────────── */
+  function refreshCookiesStatus() {
+    fetch('/api/settings/cookies-status')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var el = document.getElementById('cookies-indicator');
+        if (data.exists) {
+          el.innerHTML = '✅ Cookies loaded <small style="color:var(--pico-muted-color)">(updated ' + data.updated + ')</small>';
+        } else {
+          el.innerHTML = '❌ No cookies — upload required';
+        }
+      })
+      .catch(function() {
+        document.getElementById('cookies-indicator').textContent = '⚠️ Could not check status';
+      });
+  }
+
+  function uploadCookies() {
+    var fileInput = document.getElementById('cookies-file');
+    if (!fileInput.files || !fileInput.files.length) {
+      showToast('Please select a cookies JSON file first.');
+      return;
+    }
+    var btn = document.getElementById('upload-cookies-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Uploading…';
+
+    var fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+
+    fetch('/api/settings/cookies', { method: 'POST', body: fd })
+      .then(function(r) {
+        return r.json().then(function(data) {
+          if (r.ok) {
+            showToast('✅ Uploaded ' + data.count + ' cookies');
+            fileInput.value = '';
+          } else {
+            showToast('❌ ' + (data.error || 'Upload failed'));
+          }
+        });
+      })
+      .catch(function(err) { showToast('Error: ' + err); })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = '📤 Upload Cookies';
+        refreshCookiesStatus();
+      });
+  }
+
+  function deleteCookies() {
+    if (!confirm('Delete LinkedIn cookies? You will need to re-upload them before running discovery.')) return;
+    fetch('/api/settings/cookies', { method: 'DELETE' })
+      .then(function(r) { return r.json(); })
+      .then(function() { showToast('Cookies deleted'); })
+      .catch(function(err) { showToast('Error: ' + err); })
+      .finally(function() { refreshCookiesStatus(); });
+  }
+
+  // Check status on page load
+  refreshCookiesStatus();
+
+  /* ── Remote LinkedIn Login ────────────────────── */
+  var _loginSSE = null;
+
+  function _liLog(msg) {
+    var log = document.getElementById('li-login-log');
+    log.style.display = 'block';
+    log.textContent += msg + '\n';
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function startRemoteLogin() {
+    var email = document.getElementById('li-email').value.trim();
+    var pw = document.getElementById('li-password').value;
+    if (!email || !pw) { showToast('Enter your LinkedIn email and password.'); return; }
+
+    var btn = document.getElementById('li-login-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Logging in…';
+    document.getElementById('li-login-log').textContent = '';
+    document.getElementById('li-login-log').style.display = 'block';
+    document.getElementById('li-verify-section').style.display = 'none';
+
+    // Start SSE listener BEFORE posting so we don't miss early events
+    _startLoginSSE();
+
+    fetch('/api/settings/linkedin-login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email: email, password: pw}),
+    }).then(function(r) {
+      return r.json().then(function(data) {
+        if (!r.ok) {
+          _liLog('❌ ' + (data.error || 'Failed to start login'));
+          _stopLoginSSE();
+          btn.disabled = false;
+          btn.textContent = '🔑 Log In to LinkedIn';
+        }
+      });
+    }).catch(function(err) {
+      _liLog('Error: ' + err);
+      _stopLoginSSE();
+      btn.disabled = false;
+      btn.textContent = '🔑 Log In to LinkedIn';
+    });
+  }
+
+  function _startLoginSSE() {
+    if (_loginSSE) _loginSSE.close();
+    _loginSSE = new EventSource('/api/run/status');
+
+    _loginSSE.addEventListener('progress', function(e) {
+      _liLog(e.data);
+      // Show verification input if the task is waiting for a code
+      if (e.data && e.data.indexOf('Waiting for verification code') !== -1) {
+        document.getElementById('li-verify-section').style.display = '';
+        document.getElementById('li-verify-code').focus();
+      }
+    });
+    _loginSSE.addEventListener('complete', function(e) {
+      _liLog(e.data);
+      showToast('✅ LinkedIn login complete!');
+      _onLoginDone();
+    });
+    _loginSSE.addEventListener('task_error', function(e) {
+      _liLog(e.data);
+      showToast('❌ Login failed');
+      _onLoginDone();
+    });
+    _loginSSE.addEventListener('ping', function() { /* keepalive */ });
+  }
+
+  function _stopLoginSSE() {
+    if (_loginSSE) { _loginSSE.close(); _loginSSE = null; }
+  }
+
+  function _onLoginDone() {
+    _stopLoginSSE();
+    document.getElementById('li-login-btn').disabled = false;
+    document.getElementById('li-login-btn').textContent = '🔑 Log In to LinkedIn';
+    document.getElementById('li-verify-section').style.display = 'none';
+    document.getElementById('li-password').value = '';
+    refreshCookiesStatus();
+  }
+
+  function submitVerifyCode() {
+    var code = document.getElementById('li-verify-code').value.trim();
+    if (!code) { showToast('Enter the verification code.'); return; }
+    var btn = document.getElementById('li-verify-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Submitting…';
+
+    fetch('/api/settings/linkedin-verify', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: code}),
+    }).then(function(r) {
+      return r.json().then(function(data) {
+        if (r.ok) {
+          _liLog('Verification code submitted — waiting for result…');
+        } else {
+          _liLog('❌ ' + (data.error || 'Failed to submit code'));
+        }
+      });
+    }).catch(function(err) {
+      _liLog('Error: ' + err);
+    }).finally(function() {
+      btn.disabled = false;
+      btn.textContent = '✅ Submit Code';
+    });
+  }
+
+  /* ── Provider toggle ──────────────────────────── */
   function toggleProvider() {
     var provider = document.querySelector('input[name="email_provider"]:checked').value;
     document.getElementById('provider-resend').style.display = provider === 'resend' ? '' : 'none';

@@ -192,9 +192,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             db_ok = True
         except Exception:
             pass
+        from job_hunter import __version__
         return {
             "status": "ok",
-            "version": _app_version,
+            "version": __version__,
             "db_ok": db_ok,
             "scheduler_running": scheduler_ok,
         }

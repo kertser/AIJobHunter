@@ -1437,3 +1437,117 @@ class TestAdminDatabaseReset:
             r = c.post("/api/admin/reset-db")
             assert r.status_code == 200
             assert r.json()["reset"] is True
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn Cookie Upload / Status / Delete
+# ---------------------------------------------------------------------------
+
+
+def test_cookies_status_empty(client):
+    """GET /api/settings/cookies-status returns exists=False when no file."""
+    r = client.get("/api/settings/cookies-status")
+    assert r.status_code == 200
+    assert r.json()["exists"] is False
+
+
+def test_cookies_upload_and_status(client, test_app, tmp_path):
+    """POST /api/settings/cookies uploads valid JSON, then status shows exists."""
+    cookies_json = json.dumps([{"name": "li_at", "value": "abc123", "domain": ".linkedin.com", "path": "/"}])
+    r = client.post(
+        "/api/settings/cookies",
+        files={"file": ("cookies.json", cookies_json, "application/json")},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["uploaded"] is True
+    assert data["count"] == 1
+
+    # Status should now show exists
+    r2 = client.get("/api/settings/cookies-status")
+    assert r2.status_code == 200
+    assert r2.json()["exists"] is True
+    assert "updated" in r2.json()
+
+
+def test_cookies_upload_invalid_json(client):
+    """POST /api/settings/cookies rejects non-JSON."""
+    r = client.post(
+        "/api/settings/cookies",
+        files={"file": ("cookies.json", "not-json{{{", "application/json")},
+    )
+    assert r.status_code == 400
+    assert "Invalid cookies JSON" in r.json()["error"]
+
+
+def test_cookies_upload_not_array(client):
+    """POST /api/settings/cookies rejects JSON that is not an array."""
+    r = client.post(
+        "/api/settings/cookies",
+        files={"file": ("cookies.json", '{"name": "li_at"}', "application/json")},
+    )
+    assert r.status_code == 400
+    assert "array" in r.json()["error"].lower()
+
+
+def test_cookies_delete(client):
+    """DELETE /api/settings/cookies removes the file."""
+    # First upload
+    cookies_json = json.dumps([{"name": "li_at", "value": "x"}])
+    client.post(
+        "/api/settings/cookies",
+        files={"file": ("cookies.json", cookies_json, "application/json")},
+    )
+    # Verify exists
+    assert client.get("/api/settings/cookies-status").json()["exists"] is True
+
+    # Delete
+    r = client.delete("/api/settings/cookies")
+    assert r.status_code == 200
+    assert r.json()["deleted"] is True
+
+    # Verify gone
+    assert client.get("/api/settings/cookies-status").json()["exists"] is False
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn Remote Login endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_linkedin_login_starts_task(client):
+    """POST /api/settings/linkedin-login returns 202 and starts a background task."""
+    r = client.post("/api/settings/linkedin-login", json={
+        "email": "user@example.com",
+        "password": "secret123",
+    })
+    # May be 202 (started) or 409 (another task running) — both are valid
+    assert r.status_code in (202, 409)
+    if r.status_code == 202:
+        assert r.json()["started"] == "linkedin-login"
+
+
+def test_linkedin_login_rejects_when_task_running(client):
+    """POST /api/settings/linkedin-login returns 409 if a task is already running."""
+    import job_hunter.web.task_manager as tm_mod
+    tm = client.app.state.task_manager
+    original_prop = type(tm).is_running
+    type(tm).is_running = property(lambda self: True)
+    try:
+        r = client.post("/api/settings/linkedin-login", json={
+            "email": "user@example.com",
+            "password": "secret123",
+        })
+        assert r.status_code == 409
+    finally:
+        type(tm).is_running = original_prop
+
+
+def test_linkedin_verify_no_pending_login(client):
+    """POST /api/settings/linkedin-verify returns 400 when no login is waiting."""
+    # Ensure no future is set
+    client.app.state._linkedin_verify_future = None
+    r = client.post("/api/settings/linkedin-verify", json={"code": "123456"})
+    assert r.status_code == 400
+    assert "No login task" in r.json()["error"]
+

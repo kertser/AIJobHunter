@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────
 # AI Job Hunter — deployment script
-# Stops all running containers, prunes Docker resources,
-# pulls the latest code, rebuilds the image, and starts
-# the container with data volume and .env config.
+# Stops our container, pulls latest code, rebuilds
+# (with layer cache), and restarts.
 # ─────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -16,24 +15,21 @@ ENV_FILE=".env"
 
 echo "═══ AI Job Hunter Deploy ═══"
 
-# ── Stop running containers ──
-echo "→ Stopping running containers…"
-RUNNING=$(docker ps -q 2>/dev/null || true)
-if [ -n "$RUNNING" ]; then
-    docker stop $RUNNING
-fi
-
-# ── Prune Docker resources ──
-echo "→ Pruning Docker system (images, containers, volumes)…"
-docker system prune -a --volumes -f
+# ── Stop and remove only our container ──
+echo "→ Stopping container…"
+docker stop "$CONTAINER_NAME" 2>/dev/null || true
+docker rm "$CONTAINER_NAME" 2>/dev/null || true
 
 # ── Pull latest code ──
 echo "→ Pulling latest code…"
 git pull
 
-# ── Build image ──
+# ── Build image (layer cache preserved for fast rebuilds) ──
 echo "→ Building Docker image: ${IMAGE_NAME}…"
 DOCKER_BUILDKIT=0 docker build -t "$IMAGE_NAME" .
+
+# ── Clean up dangling images from previous build ──
+docker image prune -f 2>/dev/null || true
 
 # ── Run container ──
 echo "→ Starting container: ${CONTAINER_NAME}…"
@@ -58,4 +54,3 @@ echo "  Container : ${CONTAINER_NAME}"
 echo "  Data      : ${DATA_DIR} → /app/data"
 echo "  Logs      : docker logs -f ${CONTAINER_NAME}"
 echo "  Stop      : docker stop ${CONTAINER_NAME}"
-
