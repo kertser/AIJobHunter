@@ -13,6 +13,15 @@ from job_hunter.config.models import LogLevel
 from job_hunter.db.repo import get_engine, init_db
 from job_hunter.utils.logging import setup_logging
 
+from job_hunter import __version__
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        rprint(f"AI Job Hunter v{__version__}")
+        raise typer.Exit()
+
+
 app = typer.Typer(
     name="hunt",
     help="AI Job Hunter — discover, score, and apply to LinkedIn jobs.",
@@ -39,6 +48,7 @@ class _State:
 @app.callback()
 def main(
     ctx: typer.Context,
+    version: Annotated[Optional[bool], typer.Option("--version", "-V", help="Show version and exit", callback=_version_callback, is_eager=True)] = None,
     mock: Annotated[bool, typer.Option("--mock", help="Use mock LinkedIn site")] = False,
     real: Annotated[bool, typer.Option("--real", help="Use real LinkedIn (requires cookies)")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Run without submitting applications")] = False,
