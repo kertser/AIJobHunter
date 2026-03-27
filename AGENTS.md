@@ -146,4 +146,18 @@ Runtime data lives in `data/` (configurable via `--data-dir` or `JOBHUNTER_DATA_
 - `schedule.yml` — scheduler configuration (time, days, pipeline mode)
 - `schedule_history.yml` — last 100 scheduled run records
 - `reports/` — daily Markdown + JSON reports
+- `users/` — per-user data directories (profiles, resumes)
+
+All contents of `data/` except `.gitkeep` are gitignored (including `data/users/`).
+
+## Deployment
+
+`deploy.sh` in the project root handles full Docker deployment:
+
+```bash
+chmod +x deploy.sh
+./deploy.sh          # stop → prune → git pull → build → run on port 80
+```
+
+See also `docker-compose.yml` for compose-based deployment and `Dockerfile` for the image definition.
 
