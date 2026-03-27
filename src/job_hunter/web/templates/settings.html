@@ -97,8 +97,17 @@
       <p style="color: var(--pico-muted-color); font-size: 0.84rem; margin-top: 0;">
         Log in to LinkedIn using a headless browser on the server.
         Use this when you can't export cookies from a local browser (e.g. Docker deployment).
-        <strong>LinkedIn may require a verification code</strong> sent to your email or phone.
       </p>
+      <details style="margin-bottom: 0.8rem; font-size: 0.82rem;">
+        <summary style="cursor: pointer; color: var(--pico-muted-color);">⚠️ What to expect</summary>
+        <div style="padding: 0.6rem; border: 1px solid var(--pico-muted-border-color); border-radius: 6px; margin-top: 0.4rem; line-height: 1.5;">
+          <p style="margin:0 0 0.4rem"><strong>LinkedIn may ask for a verification code</strong> sent to your email or phone.
+            The system will automatically click "Send code" if possible. Watch the log below for status.</p>
+          <p style="margin:0 0 0.4rem">If you <strong>don't receive a code</strong>, LinkedIn may be blocking automated login from this IP.
+            In that case, use the <em>cookie upload</em> method above instead.</p>
+          <p style="margin:0">If LinkedIn shows a CAPTCHA or "approve from app" prompt, programmatic login won't work — use cookie upload.</p>
+        </div>
+      </details>
 
       <div class="grid" style="margin-bottom: 0.5rem;">
         <label>
@@ -111,15 +120,21 @@
         </label>
       </div>
 
-      <div id="li-verify-section" style="display: none; margin-bottom: 0.8rem;">
-        <label>
-          Verification Code
-          <input type="text" id="li-verify-code" placeholder="6-digit code from your email or phone"
-                 style="max-width: 300px;" autocomplete="one-time-code">
-        </label>
-        <button type="button" onclick="submitVerifyCode()" class="secondary" id="li-verify-btn" style="width: auto;">
-          ✅ Submit Code
-        </button>
+      <div id="li-verify-section" style="display: none; margin-bottom: 0.8rem;
+            padding: 0.8rem; border: 1px solid #f0ad4e; border-radius: 6px; background: rgba(240,173,78,0.08);">
+        <p id="li-verify-hint" style="font-size: 0.84rem; margin: 0 0 0.5rem; font-weight: 500;">
+          LinkedIn sent a verification code. Enter it below:
+        </p>
+        <div style="display: flex; gap: 0.6rem; align-items: end; flex-wrap: wrap;">
+          <label style="margin-bottom: 0; flex: 1; min-width: 180px;">
+            Verification Code
+            <input type="text" id="li-verify-code" placeholder="6-digit code"
+                   style="max-width: 220px;" autocomplete="one-time-code" inputmode="numeric">
+          </label>
+          <button type="button" onclick="submitVerifyCode()" class="secondary" id="li-verify-btn" style="width: auto;">
+            ✅ Submit Code
+          </button>
+        </div>
       </div>
 
       <div style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap;">
@@ -129,7 +144,7 @@
       </div>
 
       <div id="li-login-log"
-           style="display:none; margin-top: 0.8rem; max-height: 200px; overflow-y: auto;
+           style="display:none; margin-top: 0.8rem; max-height: 250px; overflow-y: auto;
                   background: var(--pico-card-background-color); border: 1px solid var(--pico-muted-border-color);
                   border-radius: 6px; padding: 0.6rem; font-family: monospace; font-size: 0.78rem; white-space: pre-wrap;">
       </div>
@@ -353,10 +368,18 @@
 
     _loginSSE.addEventListener('progress', function(e) {
       _liLog(e.data);
-      // Show verification input if the task is waiting for a code
-      if (e.data && e.data.indexOf('Waiting for verification code') !== -1) {
-        document.getElementById('li-verify-section').style.display = '';
-        document.getElementById('li-verify-code').focus();
+      // Show verification input when the task is waiting for a code
+      if (e.data) {
+        var d = e.data;
+        if (d.indexOf('Waiting for verification code') !== -1) {
+          document.getElementById('li-verify-section').style.display = '';
+          document.getElementById('li-verify-code').focus();
+        }
+        // Update the hint text with whatever LinkedIn told us
+        if (d.indexOf('Code requested') !== -1 || d.indexOf('Verification required') !== -1) {
+          document.getElementById('li-verify-section').style.display = '';
+          document.getElementById('li-verify-hint').textContent = d;
+        }
       }
     });
     _loginSSE.addEventListener('complete', function(e) {
