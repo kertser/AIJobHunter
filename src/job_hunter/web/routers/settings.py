@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+import asyncio
+import json
+import logging
+
+from fastapi import APIRouter, Depends, Request, UploadFile, File
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from job_hunter.web.deps import get_db
+
+logger = logging.getLogger("job_hunter.web.settings")
 
 router = APIRouter(tags=["settings"])
 
@@ -174,3 +180,129 @@ def _mask_key(key: str) -> str:
         return "not set" if not key else "****"
     return f"****{key[-4:]}"
 
+
+def _cookies_path(request: Request):
+    """Return the path to the global LinkedIn cookies file."""
+    from job_hunter.web.deps import get_effective_settings
+    s = get_effective_settings(request)
+    return s.data_dir / "cookies.json"
+
+
+@router.get("/api/settings/cookies-status")
+async def cookies_status(request: Request):
+    """Check whether LinkedIn cookies exist."""
+    path = _cookies_path(request)
+    if path.exists() and path.stat().st_size > 10:
+        import datetime
+        mtime = datetime.datetime.fromtimestamp(path.stat().st_mtime)
+        return {"exists": True, "updated": mtime.strftime("%Y-%m-%d %H:%M")}
+    return {"exists": False}
+
+
+@router.post("/api/settings/cookies")
+async def upload_cookies(request: Request, file: UploadFile = File(...)):
+    """Upload a LinkedIn cookies JSON file."""
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:
+        return JSONResponse({"error": "File too large (max 2 MB)"}, status_code=400)
+    try:
+        cookies = json.loads(content)
+        if not isinstance(cookies, list):
+            raise ValueError("Expected a JSON array of cookie objects")
+    except (json.JSONDecodeError, ValueError) as exc:
+        return JSONResponse({"error": f"Invalid cookies JSON: {exc}"}, status_code=400)
+
+    path = _cookies_path(request)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cookies, indent=2), encoding="utf-8")
+    return {"uploaded": True, "count": len(cookies)}
+
+
+@router.delete("/api/settings/cookies")
+async def delete_cookies(request: Request):
+    """Delete the LinkedIn cookies file."""
+    path = _cookies_path(request)
+    if path.exists():
+        path.unlink()
+    return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn remote login (programmatic, for headless / Docker environments)
+# ---------------------------------------------------------------------------
+
+
+class LinkedInLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class LinkedInVerifyRequest(BaseModel):
+    code: str
+
+
+@router.post("/api/settings/linkedin-login")
+async def linkedin_login(body: LinkedInLoginRequest, request: Request):
+    """Start a programmatic LinkedIn login as a background task.
+
+    The browser runs headless on the server.  Progress is streamed via SSE
+    on ``/api/run/status``.  If LinkedIn requests a verification code the
+    task pauses and the client should call ``POST /api/settings/linkedin-verify``
+    with the code.
+    """
+    from job_hunter.web.task_manager import TaskManager
+
+    tm: TaskManager = request.app.state.task_manager
+    if tm.is_running:
+        return JSONResponse({"error": "A task is already running"}, status_code=409)
+
+    from job_hunter.web.deps import get_effective_settings
+    settings = get_effective_settings(request)
+    cookies_path = settings.data_dir / "cookies.json"
+
+    # Create a Future the login task will await when verification is needed.
+    loop = asyncio.get_running_loop()
+    verify_future: asyncio.Future[str] = loop.create_future()
+    # Stash on app.state so the /linkedin-verify endpoint can resolve it.
+    request.app.state._linkedin_verify_future = verify_future
+
+    from job_hunter.linkedin.session import LinkedInSession
+
+    session = LinkedInSession(cookies_path=cookies_path)
+
+    async def _run() -> dict:
+        def _get_code() -> asyncio.Future[str]:
+            """Return the Future; remote_login will ``await`` it."""
+            return verify_future
+
+        result = await session.remote_login(
+            email=body.email,
+            password=body.password,
+            headless=True,
+            get_verification_code=_get_code,
+        )
+        # Clean up
+        request.app.state._linkedin_verify_future = None
+        return result
+
+    tm.start_task("linkedin-login", _run())
+    return JSONResponse({"started": "linkedin-login"}, status_code=202)
+
+
+@router.post("/api/settings/linkedin-verify")
+async def linkedin_verify(body: LinkedInVerifyRequest, request: Request):
+    """Submit a LinkedIn verification code to the running login task.
+
+    Only valid while a ``linkedin-login`` task is in progress and waiting
+    for a verification code.
+    """
+    future: asyncio.Future[str] | None = getattr(
+        request.app.state, "_linkedin_verify_future", None,
+    )
+    if future is None or future.done():
+        return JSONResponse(
+            {"error": "No login task is waiting for a verification code."},
+            status_code=400,
+        )
+    future.set_result(body.code.strip())
+    return {"submitted": True}
