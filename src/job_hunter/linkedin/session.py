@@ -281,8 +281,10 @@ class LinkedInSession:
             progress("Waiting for challenge page to fully load…")
             await page.wait_for_timeout(3000)
 
-            # Take initial screenshot
-            await self._take_screenshot(page, screenshot_dir, "checkpoint_initial", progress)
+            # Take initial screenshot (viewport-only, with short timeout)
+            await self._take_viewport_screenshot(
+                page, screenshot_dir, "checkpoint_initial", progress,
+            )
 
             # Dump page text for diagnostics
             page_text = await self._get_visible_text(page)
@@ -292,37 +294,35 @@ class LinkedInSession:
             from job_hunter.linkedin.forms import try_solve_recaptcha
             progress("Checking for reCAPTCHA checkbox (waiting up to 20s for iframe to load)…")
             captcha_clicked = await try_solve_recaptcha(page, timeout_ms=20_000)
+
+            # Step 0a: If iframe-based click didn't work, try coordinate-based
+            # auto-click.  LinkedIn's "Let's do a quick security check" page
+            # has the reCAPTCHA checkbox in a predictable position.
+            if not captcha_clicked and "security check" in page_text.lower():
+                progress("Trying coordinate-based reCAPTCHA click…")
+                captcha_clicked = await self._try_captcha_auto_click(
+                    page, progress,
+                )
+
             if captcha_clicked:
                 progress("Clicked reCAPTCHA checkbox — waiting for page to proceed…")
-                await page.wait_for_timeout(5000)
-                await self._take_screenshot(page, screenshot_dir, "checkpoint_after_recaptcha", progress)
 
-                # Check if clicking the checkbox resolved the challenge
-                url = page.url
-                if self._is_logged_in(url):
-                    progress("Login successful after reCAPTCHA! Saving cookies…")
-                    await self._save_cookies_from_context(context)
-                    progress(f"✅ Saved cookies to {self.cookies_path}")
-                    return {"status": "success"}
-
-                # The page may have auto-submitted — wait and re-check
-                await page.wait_for_load_state("domcontentloaded", timeout=10_000)
-                await page.wait_for_timeout(3000)
-                url = page.url
-                if self._is_logged_in(url):
-                    progress("Login successful after reCAPTCHA! Saving cookies…")
-                    await self._save_cookies_from_context(context)
-                    progress(f"✅ Saved cookies to {self.cookies_path}")
-                    return {"status": "success"}
+                # Wait for reCAPTCHA to verify + page navigation (up to 20s)
+                result = await self._wait_for_post_captcha_navigation(
+                    page, context, progress, screenshot_dir, timeout_s=20,
+                )
+                if result is not None:
+                    return result
 
                 # If still on checkpoint, the CAPTCHA may need an image challenge
                 # or there's an additional verification step — fall through
+                url = page.url
                 if not self._is_checkpoint(url):
                     progress(f"Page navigated to: {url}")
 
             # Step 0b: Remote interaction loop — let the user click on
             # streamed screenshots to solve CAPTCHA / any visual challenge.
-            if not captcha_clicked and get_remote_click is not None:
+            if get_remote_click is not None:
                 result = await self._remote_interaction_loop(
                     page, context,
                     progress=progress,
@@ -482,6 +482,111 @@ class LinkedInSession:
             logger.warning("Failed to take viewport screenshot: %s", exc)
             return None
 
+    @staticmethod
+    async def _try_captcha_auto_click(
+        page: Any,
+        progress: Callable[[str], None],
+    ) -> bool:
+        """Click at known reCAPTCHA checkbox coordinates on LinkedIn's security-check page.
+
+        LinkedIn's "Let's do a quick security check" page renders the
+        reCAPTCHA widget in a predictable position.  The checkbox is
+        approximately centred horizontally and in the lower-middle area
+        of the 1280×900 viewport.
+
+        We try several candidate coordinates (the widget's exact position
+        varies slightly between runs).  Returns ``True`` if a click was
+        executed (regardless of whether it solved the captcha).
+        """
+        # Candidate positions for the reCAPTCHA checkbox on 1280×900 viewport.
+        # The checkbox itself is a ~28px square; these target its centre area.
+        candidates = [
+            (505, 505),   # centred, slightly below middle
+            (505, 465),   # centred, middle
+            (505, 485),   # centred, between the two
+            (520, 505),   # slight right offset
+            (520, 465),
+        ]
+        for x, y in candidates:
+            try:
+                progress(f"Auto-clicking at ({x}, {y})…")
+                await page.mouse.click(x, y)
+                # Short wait to see if anything changed (spinner, navigation)
+                await page.wait_for_timeout(2000)
+
+                # Check for any visible change — reCAPTCHA spinner or navigation
+                url = page.url
+                page_text = await page.locator("body").inner_text()
+                # If page text changed significantly or URL moved, the click hit
+                if "security check" not in page_text.lower() or "/feed" in url:
+                    progress("Auto-click appears to have triggered the captcha.")
+                    return True
+
+                # Check if page has new iframes (reCAPTCHA challenge appeared)
+                frames = page.frames if hasattr(page, "frames") else []
+                for frame in frames:
+                    if "recaptcha" in (frame.url or "").lower():
+                        progress("Auto-click triggered reCAPTCHA processing.")
+                        return True
+
+            except Exception as exc:
+                logger.debug("Auto-click at (%d, %d) failed: %s", x, y, exc)
+                continue
+
+        progress("Auto-click did not trigger the captcha.")
+        return False
+
+    async def _wait_for_post_captcha_navigation(
+        self,
+        page: Any,
+        context: Any,
+        progress: Callable[[str], None],
+        screenshot_dir: Path,
+        timeout_s: int = 20,
+    ) -> dict[str, str] | None:
+        """Poll for page navigation after a successful captcha click.
+
+        reCAPTCHA takes several seconds to verify after the checkbox click.
+        This method polls the URL every second and returns the success dict
+        if the page navigates to a logged-in state, or ``None`` if the
+        timeout expires while still on the checkpoint.
+        """
+        import time
+
+        start = time.monotonic()
+        while (time.monotonic() - start) < timeout_s:
+            await page.wait_for_timeout(1500)
+
+            url = page.url
+            if self._is_logged_in(url):
+                progress("Login successful after reCAPTCHA! Saving cookies…")
+                await self._save_cookies_from_context(context)
+                progress(f"✅ Saved cookies to {self.cookies_path}")
+                return {"status": "success"}
+
+            # If we left the checkpoint but aren't on feed yet, wait more
+            if not self._is_checkpoint(url):
+                progress(f"Navigated to {url} — waiting for feed…")
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+                except Exception:
+                    pass
+                await page.wait_for_timeout(2000)
+                url = page.url
+                if self._is_logged_in(url):
+                    progress("Login successful after reCAPTCHA! Saving cookies…")
+                    await self._save_cookies_from_context(context)
+                    progress(f"✅ Saved cookies to {self.cookies_path}")
+                    return {"status": "success"}
+                # Not checkpoint and not feed — something else
+                break
+
+        # Take a diagnostic screenshot
+        await self._take_viewport_screenshot(
+            page, screenshot_dir, "checkpoint_after_captcha", progress,
+        )
+        return None
+
     async def _remote_interaction_loop(
         self,
         page: Any,
@@ -500,7 +605,7 @@ class LinkedInSession:
           2. Await ``get_remote_click()`` — should return ``{"x": int, "y": int}``
              for a click, or ``None`` to cancel.
           3. Execute the click via ``page.mouse.click(x, y)``.
-          4. Wait for the page to react.
+          4. Wait for the page to react (poll for navigation up to 15s).
           5. If the page navigated away from the checkpoint → success.
           6. Repeat.
 
@@ -552,29 +657,22 @@ class LinkedInSession:
                 progress(f"Click failed: {exc}")
                 continue
 
-            # 4. Wait for page reaction
-            await page.wait_for_timeout(3000)
-
-            # 5. Check if we navigated away from checkpoint
-            url = page.url
-            if self._is_logged_in(url):
-                progress("✅ Login successful! Saving cookies…")
-                await self._save_cookies_from_context(context)
-                progress(f"✅ Saved cookies to {self.cookies_path}")
+            # 4. Wait for page reaction — poll for navigation (up to 15s)
+            #    This gives reCAPTCHA time to verify after checkbox click.
+            progress("Waiting for page reaction…")
+            result = await self._wait_for_post_captcha_navigation(
+                page, context, progress, screenshot_dir, timeout_s=15,
+            )
+            if result is not None:
                 progress("REMOTE_CLICK_STOP")
-                return {"status": "success"}
+                return result
 
+            # 5. Still on checkpoint — check if page changed at all
+            url = page.url
             if not self._is_checkpoint(url):
-                # Navigated somewhere else — might be feed loading
-                progress(f"Page navigated to: {url} — waiting…")
-                await page.wait_for_timeout(3000)
-                url = page.url
-                if self._is_logged_in(url):
-                    progress("✅ Login successful! Saving cookies…")
-                    await self._save_cookies_from_context(context)
-                    progress(f"✅ Saved cookies to {self.cookies_path}")
-                    progress("REMOTE_CLICK_STOP")
-                    return {"status": "success"}
+                progress(f"Page navigated to: {url}")
+                progress("REMOTE_CLICK_STOP")
+                return None  # fall through to next step
 
         progress("REMOTE_CLICK_STOP")
         return None
