@@ -30,15 +30,16 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-# Copy installed environment from builder
-COPY --from=builder /app /app
+# Copy installed venv from builder
+COPY --from=builder /app/.venv .venv
+
+# Copy source and config (single copy, not duplicated)
+COPY pyproject.toml uv.lock ./
+COPY src/ src/
 
 # Install Playwright Chromium
 RUN uv run playwright install chromium --with-deps 2>/dev/null || true
 
-# Copy source
-COPY src/ src/
-COPY pyproject.toml uv.lock ./
 
 # Data directory is a volume mount point
 VOLUME ["/app/data"]
