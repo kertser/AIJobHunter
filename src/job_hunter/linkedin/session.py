@@ -16,10 +16,58 @@ LINKEDIN_FEED_URL = "https://www.linkedin.com/feed/"
 
 # Stealth init-script shared by all browser contexts
 _STEALTH_SCRIPT = """
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    // ── Core automation flags ──────────────────────────────────────
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-    window.chrome = { runtime: {} };
+    Object.defineProperty(navigator, 'platform',  { get: () => 'Win32' });
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+    // ── Chrome runtime (must look like a real Chrome window) ───────
+    window.chrome = {
+        runtime: { onConnect: { addListener: function(){} },
+                   onMessage: { addListener: function(){} } },
+        loadTimes: function(){ return {} },
+        csi:       function(){ return {} },
+    };
+
+    // ── Plugins (real Chrome always has these three) ───────────────
+    Object.defineProperty(navigator, 'plugins', {
+        get: () => {
+            const ps = [
+                { name: 'Chrome PDF Plugin',  filename: 'internal-pdf-viewer',           description: 'Portable Document Format' },
+                { name: 'Chrome PDF Viewer',  filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                { name: 'Native Client',      filename: 'internal-nacl-plugin',           description: '' },
+            ];
+            ps.length = 3;
+            ps.item = i => ps[i];
+            ps.namedItem = n => ps.find(p => p.name === n);
+            ps.refresh = () => {};
+            return ps;
+        }
+    });
+
+    // ── Permissions API ────────────────────────────────────────────
+    if (navigator.permissions) {
+        const _origQuery = navigator.permissions.query.bind(navigator.permissions);
+        navigator.permissions.query = p =>
+            p.name === 'notifications'
+                ? Promise.resolve({ state: Notification.permission })
+                : _origQuery(p);
+    }
+
+    // ── WebGL vendor / renderer (Intel iGPU is most common) ───────
+    const _getP = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(p) {
+        if (p === 37445) return 'Intel Inc.';
+        if (p === 37446) return 'Intel Iris OpenGL Engine';
+        return _getP.call(this, p);
+    };
+
+    // ── Connection info ────────────────────────────────────────────
+    Object.defineProperty(navigator, 'connection', {
+        get: () => ({ effectiveType: '4g', rtt: 50, downlink: 10, saveData: false })
+    });
 """
 
 
@@ -174,12 +222,18 @@ class LinkedInSession:
         _progress("Launching headless browser…")
 
         async with async_playwright() as pw:
+            _stealth_args = [
+                "--disable-blink-features=AutomationControlled",
+            ]
             try:
                 browser = await pw.chromium.launch(
                     headless=headless, slow_mo=slowmo_ms, channel="chrome",
+                    args=_stealth_args,
                 )
             except Exception:
-                browser = await pw.chromium.launch(headless=headless, slow_mo=slowmo_ms)
+                browser = await pw.chromium.launch(
+                    headless=headless, slow_mo=slowmo_ms, args=_stealth_args,
+                )
 
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 900},
@@ -192,16 +246,6 @@ class LinkedInSession:
             )
             await context.add_init_script(_STEALTH_SCRIPT)
 
-            # Block font downloads — Playwright screenshots wait for fonts
-            # to load and LinkedIn's fonts frequently hang or time out,
-            # making the remote-click loop unusable.
-            async def _block_fonts(route):
-                if route.request.resource_type == "font":
-                    await route.abort()
-                else:
-                    await route.continue_()
-
-            await context.route("**/*", _block_fonts)
 
             page = await context.new_page()
 
@@ -506,71 +550,84 @@ class LinkedInSession:
             return None  # not a reCAPTCHA – let caller handle
 
         # ── Step 2: click the checkbox ──────────────────────────────
+        checkbox_clicked = False
         try:
             cb = anchor.locator("#recaptcha-anchor")
-            await cb.wait_for(state="visible", timeout=10_000)
-            # Short pause so the widget finishes its init animation
-            await page.wait_for_timeout(600)
-            await cb.click()
+            # Use "attached" — the element may not be considered "visible"
+            # if the reCAPTCHA spinner is covering it.
+            await cb.wait_for(state="attached", timeout=15_000)
+            # Let the widget finish its init animation
+            await page.wait_for_timeout(1000)
+            # force=True bypasses Playwright's visibility/actionability
+            # checks — the reCAPTCHA widget sometimes isn't considered
+            # "visible" due to overlapping spinner/loading elements.
+            await cb.click(force=True, timeout=5_000)
+            checkbox_clicked = True
             progress("✅ Clicked reCAPTCHA checkbox.")
         except Exception as exc:
-            progress(f"Could not click reCAPTCHA checkbox: {exc}")
-            return None  # let caller try other strategies
+            progress(f"Auto-click on reCAPTCHA failed: {exc}")
 
         # ── Step 3: wait for outcome ────────────────────────────────
-        progress("Waiting for reCAPTCHA to process…")
-
         challenge_detected = False
-        deadline = time.monotonic() + 30
 
-        while time.monotonic() < deadline:
-            await page.wait_for_timeout(1500)
+        if checkbox_clicked:
+            progress("Waiting for reCAPTCHA to process…")
 
-            # Did the page navigate?
-            url = page.url
-            if self._is_logged_in(url):
-                return await self._save_and_return(context, progress)
-            if not self._is_checkpoint(url):
-                # Navigated away from checkpoint but not to feed yet
-                await page.wait_for_timeout(3000)
-                if self._is_logged_in(page.url):
+            deadline = time.monotonic() + 30
+
+            while time.monotonic() < deadline:
+                await page.wait_for_timeout(1500)
+
+                # Did the page navigate?
+                url = page.url
+                if self._is_logged_in(url):
                     return await self._save_and_return(context, progress)
-                break
-
-            # Image challenge appeared? (bframe iframe)
-            for f in page.frames:
-                furl = f.url or ""
-                if "recaptcha" in furl and "bframe" in furl:
-                    challenge_detected = True
-                    break
-            if challenge_detected:
-                progress("🖼️ Image challenge detected — manual solving required.")
-                break
-
-            # Checkbox turned green? (auto-pass, no image challenge)
-            try:
-                checked = anchor.locator(
-                    '#recaptcha-anchor[aria-checked="true"]'
-                )
-                if await checked.count() > 0:
-                    progress("reCAPTCHA passed without image challenge!")
-                    await self._try_click_submit_after_captcha(page, progress)
-                    await page.wait_for_timeout(5000)
+                if not self._is_checkpoint(url):
+                    # Navigated away from checkpoint but not to feed yet
+                    await page.wait_for_timeout(3000)
                     if self._is_logged_in(page.url):
                         return await self._save_and_return(context, progress)
-                    result = await self._wait_for_post_captcha_navigation(
-                        page, context, progress, screenshot_dir,
-                    )
-                    if result:
-                        return result
                     break
-            except Exception:
-                pass
 
-        # ── Step 4: image challenge → remote-click loop ─────────────
-        if challenge_detected and get_remote_click is not None:
-            # Let the challenge images fully render
-            await page.wait_for_timeout(2000)
+                # Image challenge appeared? (bframe iframe)
+                for f in page.frames:
+                    furl = f.url or ""
+                    if "recaptcha" in furl and "bframe" in furl:
+                        challenge_detected = True
+                        break
+                if challenge_detected:
+                    progress("🖼️ Image challenge detected — manual solving required.")
+                    break
+
+                # Checkbox turned green? (auto-pass, no image challenge)
+                try:
+                    checked = anchor.locator(
+                        '#recaptcha-anchor[aria-checked="true"]'
+                    )
+                    if await checked.count() > 0:
+                        progress("reCAPTCHA passed without image challenge!")
+                        await self._try_click_submit_after_captcha(page, progress)
+                        await page.wait_for_timeout(5000)
+                        if self._is_logged_in(page.url):
+                            return await self._save_and_return(context, progress)
+                        result = await self._wait_for_post_captcha_navigation(
+                            page, context, progress, screenshot_dir,
+                        )
+                        if result:
+                            return result
+                        break
+                except Exception:
+                    pass
+
+        # ── Step 4: remote-click loop (image challenge or manual) ────
+        if get_remote_click is not None:
+            if not checkbox_clicked and not challenge_detected:
+                progress(
+                    "Please click the 'I'm not a robot' checkbox in the screenshot."
+                )
+
+            # Let any new content render before the first screenshot
+            await page.wait_for_timeout(1500 if challenge_detected else 500)
 
             result = await self._remote_interaction_loop(
                 page, context,
@@ -875,16 +932,20 @@ class LinkedInSession:
         get_remote_click: Callable[[], Any],
         screenshot_dir: Path,
         max_clicks: int = 200,
-        overall_timeout_s: int = 300,
+        overall_timeout_s: int = 600,
     ) -> dict[str, str] | None:
         """Let the user solve a visual challenge by clicking on screenshots.
 
         Designed for **maximum speed** so the user can rapidly click through
         reCAPTCHA image challenges (e.g. "select all crossroads").
 
-        Each click cycle: screenshot → wait for click → execute → 0.5s pause → repeat.
+        Screenshots auto-refresh every ~2 s even without a click, so the
+        user always sees the latest page state (e.g. new tile images
+        loading, spinner, challenge transition).
         """
         import time
+
+        REFRESH_INTERVAL = 2.0  # seconds between screenshot refreshes
 
         progress("REMOTE_CLICK_START")
         progress(
@@ -896,7 +957,7 @@ class LinkedInSession:
         click_count = 0
 
         while click_count < max_clicks and (time.monotonic() - start) < overall_timeout_s:
-            # 1. Take screenshot — fast, viewport-only
+            # 1. Take screenshot — fast, viewport-only (CDP)
             ss = await self._take_viewport_screenshot(
                 page, screenshot_dir, "remote_click", progress,
             )
@@ -905,14 +966,16 @@ class LinkedInSession:
                 await page.wait_for_timeout(2000)
                 continue
 
-            # 2. Wait for user click
+            # 2. Wait for user click — short timeout so we auto-refresh
             try:
                 click_data = get_remote_click()
                 if asyncio.isfuture(click_data) or asyncio.iscoroutine(click_data):
-                    click_data = await asyncio.wait_for(click_data, timeout=120)
+                    click_data = await asyncio.wait_for(
+                        click_data, timeout=REFRESH_INTERVAL,
+                    )
             except asyncio.TimeoutError:
-                progress("⏰ Timed out waiting for click.")
-                break
+                # No click yet — loop back to refresh the screenshot
+                continue
             except Exception as exc:
                 progress(f"Error: {exc}")
                 break
@@ -949,8 +1012,8 @@ class LinkedInSession:
 
             progress(f"🖱️ #{click_count} ({x}, {y})")
 
-            # 5. Very short pause — just enough for the page to react
-            await page.wait_for_timeout(500)
+            # 5. Let the page react (tile fade, new images, navigation)
+            await page.wait_for_timeout(800)
 
             # 6. Quick URL check — did we leave the checkpoint?
             url = page.url
