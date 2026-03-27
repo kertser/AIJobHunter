@@ -277,51 +277,15 @@ class LinkedInSession:
         if self._is_checkpoint(url):
             progress("LinkedIn is requesting a security check…")
 
-            # Wait extra time for challenge iframes / CAPTCHAs to render
-            progress("Waiting for challenge page to fully load…")
-            await page.wait_for_timeout(3000)
-
-            # Take initial screenshot (viewport-only, with short timeout)
-            await self._take_viewport_screenshot(
-                page, screenshot_dir, "checkpoint_initial", progress,
-            )
+            # Brief wait for page to render
+            await page.wait_for_timeout(1500)
 
             # Dump page text for diagnostics
             page_text = await self._get_visible_text(page)
-            progress(f"Page content: {page_text[:500]}")
+            progress(f"Page content: {page_text[:300]}")
 
-            # Step 0: Try to click reCAPTCHA "I'm not a robot" checkbox
-            from job_hunter.linkedin.forms import try_solve_recaptcha
-            progress("Checking for reCAPTCHA checkbox (waiting up to 20s for iframe to load)…")
-            captcha_clicked = await try_solve_recaptcha(page, timeout_ms=20_000)
-
-            # Step 0a: If iframe-based click didn't work, try coordinate-based
-            # auto-click.  LinkedIn's "Let's do a quick security check" page
-            # has the reCAPTCHA checkbox in a predictable position.
-            if not captcha_clicked and "security check" in page_text.lower():
-                progress("Trying coordinate-based reCAPTCHA click…")
-                captcha_clicked = await self._try_captcha_auto_click(
-                    page, progress,
-                )
-
-            if captcha_clicked:
-                progress("Clicked reCAPTCHA checkbox — waiting for page to proceed…")
-
-                # Wait for reCAPTCHA to verify + page navigation (up to 20s)
-                result = await self._wait_for_post_captcha_navigation(
-                    page, context, progress, screenshot_dir, timeout_s=20,
-                )
-                if result is not None:
-                    return result
-
-                # If still on checkpoint, the CAPTCHA may need an image challenge
-                # or there's an additional verification step — fall through
-                url = page.url
-                if not self._is_checkpoint(url):
-                    progress(f"Page navigated to: {url}")
-
-            # Step 0b: Remote interaction loop — let the user click on
-            # streamed screenshots to solve CAPTCHA / any visual challenge.
+            # Go straight to remote interaction if available — the user
+            # needs full control for reCAPTCHA image challenges.
             if get_remote_click is not None:
                 result = await self._remote_interaction_loop(
                     page, context,
@@ -331,9 +295,7 @@ class LinkedInSession:
                 )
                 if result is not None:
                     return result
-                # If the loop returned None, fall through to the
-                # verification-code flow (user may have cancelled or
-                # the loop timed out while still on a checkpoint).
+                # Fall through to verification-code flow if user cancelled
 
             # Step 1: Try to trigger code delivery
             sent = await self._try_trigger_code_send(page, progress)
@@ -661,37 +623,29 @@ class LinkedInSession:
         progress: Callable[[str], None],
         get_remote_click: Callable[[], Any],
         screenshot_dir: Path,
-        max_clicks: int = 50,
+        max_clicks: int = 200,
         overall_timeout_s: int = 300,
     ) -> dict[str, str] | None:
         """Let the user solve a visual challenge by clicking on screenshots.
 
-        Designed for **speed**: each click cycle takes ~2–3 seconds so the
-        user sees near-real-time feedback.
+        Designed for **maximum speed** so the user can rapidly click through
+        reCAPTCHA image challenges (e.g. "select all crossroads").
 
-        Loop:
-          1. Take a viewport screenshot and stream it to the UI.
-          2. Await ``get_remote_click()`` — returns ``{"x", "y"}`` or ``None``.
-          3. Drain any extra queued clicks, keep only the latest.
-          4. Execute the click via ``page.mouse.click(x, y)``.
-          5. Short wait (2s) + quick URL check.
-          6. Repeat.
-
-        Returns ``{"status": "success"}`` on login, or ``None`` if cancelled.
+        Each click cycle: screenshot → wait for click → execute → 0.5s pause → repeat.
         """
         import time
 
         progress("REMOTE_CLICK_START")
         progress(
-            "🖱️ Remote interaction mode — click on the screenshot to solve "
-            "the challenge. Click 'Stop Remote Click' when done."
+            "🖱️ Click on the screenshot to interact with the page. "
+            "Click 'Stop' when done."
         )
 
         start = time.monotonic()
         click_count = 0
 
         while click_count < max_clicks and (time.monotonic() - start) < overall_timeout_s:
-            # 1. Take screenshot (fast, viewport-only)
+            # 1. Take screenshot — fast, viewport-only
             await self._take_viewport_screenshot(
                 page, screenshot_dir, "remote_click", progress,
             )
@@ -702,40 +656,34 @@ class LinkedInSession:
                 if asyncio.isfuture(click_data) or asyncio.iscoroutine(click_data):
                     click_data = await asyncio.wait_for(click_data, timeout=120)
             except asyncio.TimeoutError:
-                progress("⏰ Remote interaction timed out waiting for click.")
+                progress("⏰ Timed out waiting for click.")
                 break
             except Exception as exc:
-                progress(f"Remote interaction error: {exc}")
+                progress(f"Error: {exc}")
                 break
 
             if click_data is None:
-                progress("Remote interaction cancelled by user.")
+                progress("Remote interaction stopped.")
                 break
 
-            # 3. Drain stale clicks from queue — keep only the latest.
-            #    The user may have clicked multiple times while we were
-            #    waiting; only the most recent click matters.
+            # 3. Drain stale clicks — keep only the latest
             latest = click_data
             try:
-                # get_remote_click is a coroutine factory; peek at the queue
-                # by attempting non-blocking gets via asyncio.wait_for(0).
                 while True:
                     peek = get_remote_click()
                     if asyncio.isfuture(peek) or asyncio.iscoroutine(peek):
-                        peek = await asyncio.wait_for(peek, timeout=0.05)
+                        peek = await asyncio.wait_for(peek, timeout=0.01)
                     if peek is None:
-                        # Cancel signal takes priority
-                        progress("Remote interaction cancelled by user.")
+                        progress("Remote interaction stopped.")
                         progress("REMOTE_CLICK_STOP")
                         return None
                     latest = peek
             except (asyncio.TimeoutError, Exception):
-                pass  # queue is empty — good
+                pass
 
             x = latest.get("x", 0)
             y = latest.get("y", 0)
             click_count += 1
-            progress(f"🖱️ Click #{click_count} at ({x}, {y})")
 
             # 4. Execute the click
             try:
@@ -744,10 +692,12 @@ class LinkedInSession:
                 progress(f"Click failed: {exc}")
                 continue
 
-            # 5. Short wait for page reaction — keep it fast
-            await page.wait_for_timeout(2000)
+            progress(f"🖱️ #{click_count} ({x}, {y})")
 
-            # 6. Quick URL check
+            # 5. Very short pause — just enough for the page to react
+            await page.wait_for_timeout(500)
+
+            # 6. Quick URL check — did we leave the checkpoint?
             url = page.url
             if self._is_logged_in(url):
                 progress("✅ Login successful! Saving cookies…")
@@ -757,7 +707,6 @@ class LinkedInSession:
                 return {"status": "success"}
 
             if not self._is_checkpoint(url):
-                # Page left checkpoint — maybe loading feed
                 progress(f"Page navigated to: {url} — waiting…")
                 await page.wait_for_timeout(3000)
                 url = page.url
@@ -767,11 +716,9 @@ class LinkedInSession:
                     progress(f"✅ Saved cookies to {self.cookies_path}")
                     progress("REMOTE_CLICK_STOP")
                     return {"status": "success"}
-                # Left checkpoint but not feed — fall through
                 progress("REMOTE_CLICK_STOP")
                 return None
 
-            # Still on checkpoint — loop back for next screenshot + click
 
         progress("REMOTE_CLICK_STOP")
         return None
