@@ -283,8 +283,8 @@ class LinkedInSession:
 
             # Step 0: Try to click reCAPTCHA "I'm not a robot" checkbox
             from job_hunter.linkedin.forms import try_solve_recaptcha
-            progress("Checking for reCAPTCHA checkbox…")
-            captcha_clicked = await try_solve_recaptcha(page, timeout_ms=15_000)
+            progress("Checking for reCAPTCHA checkbox (waiting up to 20s for iframe to load)…")
+            captcha_clicked = await try_solve_recaptcha(page, timeout_ms=20_000)
             if captcha_clicked:
                 progress("Clicked reCAPTCHA checkbox — waiting for page to proceed…")
                 await page.wait_for_timeout(5000)
