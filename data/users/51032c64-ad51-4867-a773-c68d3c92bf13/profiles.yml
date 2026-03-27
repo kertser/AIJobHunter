@@ -2,10 +2,9 @@ profiles:
 - name: data-science-ml
   keywords:
   - Data Scientist
-  - Machine Learning Engineer
+  - Machine Learning
   - Data Science
   - Python
-  - Machine Learning
   - Deep Learning
   location: Remote
   remote: true
@@ -25,7 +24,7 @@ profiles:
   - Python
   - MATLAB
   location: Israel
-  remote: false
+  remote: true
   seniority:
   - Senior
   - Mid-Senior

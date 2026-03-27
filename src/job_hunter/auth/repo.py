@@ -123,6 +123,48 @@ def delete_user(session: Session, user_id: uuid.UUID) -> bool:
     return True
 
 
+def update_user_profile(
+    session: Session,
+    user_id: uuid.UUID,
+    *,
+    display_name: str | None = None,
+    email: str | None = None,
+) -> User | None:
+    """Update display_name and/or email. Returns updated User or None."""
+    user = get_user_by_id(session, user_id)
+    if user is None:
+        return None
+    if display_name is not None:
+        user.display_name = display_name
+    if email is not None:
+        user.email = email.lower().strip()
+    session.flush()
+    return user
+
+
+def change_user_password(
+    session: Session,
+    user_id: uuid.UUID,
+    *,
+    current_password: str,
+    new_password: str,
+) -> tuple[bool, str]:
+    """Verify the current password and set a new one.
+
+    Returns ``(True, "")`` on success or ``(False, reason)`` on failure.
+    """
+    user = get_user_by_id(session, user_id)
+    if user is None:
+        return False, "User not found"
+    if not verify_password(current_password, user.password_hash):
+        return False, "Current password is incorrect"
+    if len(new_password) < 8:
+        return False, "New password must be at least 8 characters"
+    user.password_hash = hash_password(new_password)
+    session.flush()
+    return True, ""
+
+
 # ---------------------------------------------------------------------------
 # Per-user data directory
 # ---------------------------------------------------------------------------

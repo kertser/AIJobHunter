@@ -132,6 +132,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # Import and include routers
+    from job_hunter.web.routers import account as account_router
     from job_hunter.web.routers import admin as admin_router
     from job_hunter.web.routers import auth as auth_router
     from job_hunter.web.routers import dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings as settings_router, schedule
@@ -192,6 +193,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         return {"status": "ok", "db_ok": db_ok, "scheduler_running": scheduler_ok}
 
     app.include_router(auth_router.router)
+    app.include_router(account_router.router)
     app.include_router(admin_router.router)
     app.include_router(dashboard.router)
     app.include_router(onboarding.router)
