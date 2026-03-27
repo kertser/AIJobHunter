@@ -447,7 +447,7 @@ class LinkedInSession:
         """
         try:
             path = screenshot_dir / f"{name}.png"
-            await page.screenshot(path=str(path), full_page=True)
+            await page.screenshot(path=str(path), full_page=True, timeout=10_000)
             progress(f"SCREENSHOT:{name}.png")
             logger.debug("Screenshot saved: %s", path)
             return path
@@ -471,16 +471,20 @@ class LinkedInSession:
         """
         try:
             path = screenshot_dir / f"{name}.png"
-            await asyncio.wait_for(
-                page.screenshot(path=str(path), full_page=False),
-                timeout=10,
-            )
+            await page.screenshot(path=str(path), full_page=False, timeout=10_000)
             progress(f"SCREENSHOT:{name}.png")
             logger.debug("Viewport screenshot saved: %s", path)
             return path
         except Exception as exc:
-            logger.warning("Failed to take viewport screenshot: %s", exc)
-            return None
+            logger.warning("Viewport screenshot failed (%s), trying full-page…", exc)
+            try:
+                path = screenshot_dir / f"{name}.png"
+                await page.screenshot(path=str(path), full_page=True, timeout=10_000)
+                progress(f"SCREENSHOT:{name}.png")
+                return path
+            except Exception as exc2:
+                logger.warning("Full-page screenshot also failed: %s", exc2)
+                return None
 
     @staticmethod
     async def _try_captcha_auto_click(
@@ -542,20 +546,26 @@ class LinkedInSession:
         context: Any,
         progress: Callable[[str], None],
         screenshot_dir: Path,
-        timeout_s: int = 20,
+        timeout_s: int = 30,
     ) -> dict[str, str] | None:
         """Poll for page navigation after a successful captcha click.
 
         reCAPTCHA takes several seconds to verify after the checkbox click.
-        This method polls the URL every second and returns the success dict
-        if the page navigates to a logged-in state, or ``None`` if the
-        timeout expires while still on the checkpoint.
+        This method:
+          1. Polls the URL every 2s checking for navigation.
+          2. After 6s, tries clicking any Submit/Continue button that
+             LinkedIn may show after the captcha is solved.
+          3. Returns the success dict if the page navigates to a
+             logged-in state, or ``None`` on timeout.
         """
         import time
 
         start = time.monotonic()
+        submit_attempted = False
+
         while (time.monotonic() - start) < timeout_s:
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(2000)
+            elapsed = time.monotonic() - start
 
             url = page.url
             if self._is_logged_in(url):
@@ -571,7 +581,7 @@ class LinkedInSession:
                     await page.wait_for_load_state("domcontentloaded", timeout=10_000)
                 except Exception:
                     pass
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(3000)
                 url = page.url
                 if self._is_logged_in(url):
                     progress("Login successful after reCAPTCHA! Saving cookies…")
@@ -581,11 +591,67 @@ class LinkedInSession:
                 # Not checkpoint and not feed — something else
                 break
 
+            # After ~6s, the reCAPTCHA should have verified — try clicking
+            # any submit/continue button LinkedIn may show.
+            if elapsed > 6 and not submit_attempted:
+                submit_attempted = True
+                progress("Looking for Submit/Continue button after captcha…")
+                clicked = await self._try_click_submit_after_captcha(page, progress)
+                if clicked:
+                    # Wait for navigation after clicking submit
+                    await page.wait_for_timeout(5000)
+                    url = page.url
+                    if self._is_logged_in(url):
+                        progress("Login successful! Saving cookies…")
+                        await self._save_cookies_from_context(context)
+                        progress(f"✅ Saved cookies to {self.cookies_path}")
+                        return {"status": "success"}
+
         # Take a diagnostic screenshot
         await self._take_viewport_screenshot(
             page, screenshot_dir, "checkpoint_after_captcha", progress,
         )
         return None
+
+    @staticmethod
+    async def _try_click_submit_after_captcha(
+        page: Any,
+        progress: Callable[[str], None],
+    ) -> bool:
+        """Try to click a Submit / Continue / Verify button after reCAPTCHA.
+
+        After the reCAPTCHA checkbox is checked, LinkedIn's challenge page
+        may require an explicit button click to proceed.
+        """
+        submit_selectors = [
+            # Generic form submit buttons
+            'button[type="submit"]',
+            'input[type="submit"]',
+            # LinkedIn-specific challenge buttons
+            'button#home_children_button',
+            'button[data-litms-control-urn*="checkpoint"]',
+            # Text-based matches
+            'button:has-text("Submit")',
+            'button:has-text("Continue")',
+            'button:has-text("Verify")',
+            'button:has-text("Next")',
+            'button:has-text("Done")',
+            # Links that act as buttons
+            'a:has-text("Continue")',
+            'a:has-text("Submit")',
+        ]
+        for sel in submit_selectors:
+            try:
+                btn = page.locator(sel)
+                if await btn.count() > 0 and await btn.first.is_visible():
+                    label = (await btn.first.text_content() or "").strip()
+                    progress(f"Clicking '{label or sel}' button…")
+                    await btn.first.click()
+                    return True
+            except Exception:
+                continue
+        progress("No submit button found on the page.")
+        return False
 
     async def _remote_interaction_loop(
         self,
