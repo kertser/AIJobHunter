@@ -6,7 +6,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, Float, Integer, String, Text, Uuid
+from sqlalchemy import JSON, Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -43,6 +43,9 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True, index=True,
+    )
     source: Mapped[str] = mapped_column(String(50), default="linkedin")
     external_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
@@ -66,6 +69,9 @@ class Score(Base):
     __tablename__ = "scores"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True, index=True,
+    )
     job_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     resume_id: Mapped[str] = mapped_column(String(255), default="default")
     embedding_similarity: Mapped[float] = mapped_column(Float, default=0.0)
@@ -84,6 +90,9 @@ class ApplicationAttempt(Base):
     __tablename__ = "application_attempts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True, index=True,
+    )
     job_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

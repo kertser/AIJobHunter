@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from job_hunter.config.loader import load_profiles, load_user_profile
+from job_hunter.web.deps import get_user_data_dir
 from job_hunter.web.task_manager import TaskManager
 
 logger = logging.getLogger("job_hunter.web.run")
@@ -17,20 +20,24 @@ logger = logging.getLogger("job_hunter.web.run")
 router = APIRouter(tags=["run"])
 
 
-def _load_run_params(settings) -> dict:
-    """Load common params from settings + profile files for pipeline runs."""
+def _load_run_params(settings, *, data_dir: Path | None = None) -> dict:
+    """Load common params from settings + profile files for pipeline runs.
+
+    *data_dir* overrides ``settings.data_dir`` when per-user directories are used.
+    """
+    dd = data_dir or settings.data_dir
     params: dict = {
         "mock": settings.mock,
         "dry_run": settings.dry_run,
         "headless": settings.headless,
         "slowmo_ms": settings.slowmo_ms,
-        "data_dir": settings.data_dir,
+        "data_dir": dd,
         "openai_api_key": settings.openai_api_key,
         "cookies_path": str(settings.data_dir / "cookies.json"),
     }
 
     # Load search profile defaults
-    profiles_path = settings.data_dir / "profiles.yml"
+    profiles_path = dd / "profiles.yml"
     if profiles_path.exists():
         profs = load_profiles(profiles_path)
         if profs:
@@ -49,7 +56,7 @@ def _load_run_params(settings) -> dict:
             )
 
     # Load resume text and user preferences
-    user_profile_path = settings.data_dir / "user_profile.yml"
+    user_profile_path = dd / "user_profile.yml"
     if user_profile_path.exists():
         try:
             up = load_user_profile(user_profile_path)
@@ -65,7 +72,7 @@ def _load_run_params(settings) -> dict:
         except Exception:
             pass
 
-    resume_path = settings.data_dir / "resume.pdf"
+    resume_path = dd / "resume.pdf"
     params["resume_path"] = str(resume_path) if resume_path.exists() else "tests/fixtures/resume.txt"
 
     params.setdefault("profile_name", "default")
@@ -73,6 +80,11 @@ def _load_run_params(settings) -> dict:
     params.setdefault("user_preferences", None)
 
     return params
+
+
+def _get_user_id(request: Request) -> uuid.UUID | None:
+    user = getattr(request.state, "user", None)
+    return user.id if user else None
 
 
 @router.get("/run")
@@ -87,16 +99,21 @@ async def run_page(request: Request):
 @router.post("/api/run/discover")
 async def run_discover(request: Request):
     tm: TaskManager = request.app.state.task_manager
-    settings = request.app.state.settings
     engine = request.app.state.engine
     if tm.is_running:
         return JSONResponse({"error": "A task is already running"}, status_code=409)
 
-    params = _load_run_params(settings)
+    from job_hunter.web.deps import get_effective_settings
+    settings = get_effective_settings(request)
+    user_id = _get_user_id(request)
+    data_dir = get_user_data_dir(request)
+    params = _load_run_params(settings, data_dir=data_dir)
 
     from job_hunter.linkedin.discover import discover_jobs
     from job_hunter.db.models import Job
     from job_hunter.db.repo import make_session, upsert_job
+
+    captured_user_id = user_id
 
     async def _run():
         logger.info(
@@ -124,7 +141,10 @@ async def run_discover(request: Request):
             logger.warning("No jobs discovered. Check the progress log above for details.")
         session = make_session(engine)
         for jd in job_dicts:
-            upsert_job(session, Job(**jd))
+            job = Job(**jd)
+            if captured_user_id is not None:
+                job.user_id = captured_user_id
+            upsert_job(session, job, user_id=captured_user_id)
         session.commit()
         session.close()
         return {"discovered": len(job_dicts)}
@@ -136,18 +156,23 @@ async def run_discover(request: Request):
 @router.post("/api/run/score")
 async def run_score(request: Request):
     tm: TaskManager = request.app.state.task_manager
-    settings = request.app.state.settings
     engine = request.app.state.engine
     if tm.is_running:
         return JSONResponse({"error": "A task is already running"}, status_code=409)
 
-    params = _load_run_params(settings)
+    from job_hunter.web.deps import get_effective_settings
+    settings = get_effective_settings(request)
+    user_id = _get_user_id(request)
+    data_dir = get_user_data_dir(request)
+    params = _load_run_params(settings, data_dir=data_dir)
 
     from job_hunter.db.models import JobStatus, Score
     from job_hunter.db.repo import make_session, save_score
     from job_hunter.matching.embeddings import FakeEmbedder, OpenAIEmbedder
     from job_hunter.matching.llm_eval import FakeLLMEvaluator, OpenAILLMEvaluator
     from job_hunter.matching.scoring import compute_score, decide_job_status, decision_to_db
+
+    captured_user_id = user_id
 
     async def _run():
         def _score_sync():
@@ -168,13 +193,18 @@ async def run_score(request: Request):
                 embedder = OpenAIEmbedder(api_key=api_key)
                 evaluator = OpenAILLMEvaluator(api_key=api_key)
 
-            # Find all jobs that don't have a Score record yet
+            # Find all jobs that don't have a Score record yet (scoped to user)
             from sqlalchemy import select
             from job_hunter.db.models import Job
-            all_jobs = session.execute(select(Job)).scalars().all()
-            scored_hashes = set(
-                row[0] for row in session.execute(select(Score.job_hash)).all()
-            )
+            job_q = select(Job)
+            if captured_user_id is not None:
+                job_q = job_q.where(Job.user_id == captured_user_id)
+            all_jobs = session.execute(job_q).scalars().all()
+
+            score_q = select(Score.job_hash)
+            if captured_user_id is not None:
+                score_q = score_q.where(Score.user_id == captured_user_id)
+            scored_hashes = set(row[0] for row in session.execute(score_q).all())
             unscored_jobs = [j for j in all_jobs if j.hash not in scored_hashes]
 
             if not unscored_jobs:
@@ -198,8 +228,9 @@ async def run_score(request: Request):
                     job_hash=job.hash, embedding_similarity=result["embedding_similarity"],
                     llm_fit_score=result["llm_fit_score"], missing_skills=result["missing_skills"],
                     risk_flags=result["risk_flags"], decision=decision_to_db(result["decision"]),
+                    user_id=captured_user_id,
                 )
-                save_score(session, score_row)
+                save_score(session, score_row, user_id=captured_user_id)
                 job.status = decide_job_status(
                     easy_apply=job.easy_apply, fit_score=result["llm_fit_score"],
                     similarity=result["embedding_similarity"], decision_str=result["decision"],
@@ -225,19 +256,22 @@ async def run_score(request: Request):
 @router.post("/api/run/apply")
 async def run_apply(request: Request):
     tm: TaskManager = request.app.state.task_manager
-    settings = request.app.state.settings
     engine = request.app.state.engine
     if tm.is_running:
         return JSONResponse({"error": "A task is already running"}, status_code=409)
 
-    params = _load_run_params(settings)
+    from job_hunter.web.deps import get_effective_settings
+    settings = get_effective_settings(request)
+    user_id = _get_user_id(request)
+    data_dir = get_user_data_dir(request)
+    params = _load_run_params(settings, data_dir=data_dir)
+    captured_user_id = user_id
 
     # Build form answers from user profile
     profile_form_answers: dict[str, str] = {}
     user_profile = None
     try:
-        from job_hunter.config.loader import load_user_profile
-        user_profile_path = settings.data_dir / "user_profile.yml"
+        user_profile_path = data_dir / "user_profile.yml"
         if user_profile_path.exists():
             user_profile = load_user_profile(user_profile_path)
             profile_form_answers = user_profile.build_form_answers()
@@ -258,7 +292,7 @@ async def run_apply(request: Request):
         from job_hunter.linkedin.mock_site import MockLinkedInServer
 
         session = make_session(engine)
-        queued = get_jobs_by_status(session, JobStatus.QUEUED)
+        queued = get_jobs_by_status(session, JobStatus.QUEUED, user_id=captured_user_id)
         applied = 0
         mock_server = None
         if params["mock"] and queued:
@@ -283,8 +317,9 @@ async def run_apply(request: Request):
                     job_hash=job.hash, result=result_map.get(result["result"], ApplicationResult.FAILED),
                     failure_stage=result.get("failure_stage"),
                     form_answers_json=result.get("form_answers", {}),
+                    user_id=captured_user_id,
                 )
-                save_attempt(session, attempt)
+                save_attempt(session, attempt, user_id=captured_user_id)
                 status_map = {"success": JobStatus.APPLIED, "dry_run": JobStatus.APPLIED,
                               "failed": JobStatus.FAILED, "blocked": JobStatus.BLOCKED,
                               "already_applied": JobStatus.APPLIED}
@@ -307,11 +342,13 @@ async def run_apply(request: Request):
 @router.post("/api/run/pipeline")
 async def run_pipeline_endpoint(request: Request):
     tm: TaskManager = request.app.state.task_manager
-    settings = request.app.state.settings
     if tm.is_running:
         return JSONResponse({"error": "A task is already running"}, status_code=409)
 
-    params = _load_run_params(settings)
+    from job_hunter.web.deps import get_effective_settings
+    settings = get_effective_settings(request)
+    data_dir = get_user_data_dir(request)
+    params = _load_run_params(settings, data_dir=data_dir)
 
     from job_hunter.orchestration.pipeline import run_pipeline
 
@@ -324,12 +361,14 @@ async def run_pipeline_endpoint(request: Request):
 async def run_market(request: Request):
     """Run the full market intelligence pipeline as a background task."""
     tm: TaskManager = request.app.state.task_manager
-    settings = request.app.state.settings
     engine = request.app.state.engine
     if tm.is_running:
         return JSONResponse({"error": "A task is already running"}, status_code=409)
 
-    from job_hunter.config.loader import load_user_profile
+    from job_hunter.web.deps import get_effective_settings
+    settings = get_effective_settings(request)
+    data_dir = get_user_data_dir(request)
+
     from job_hunter.db.repo import make_session
     from job_hunter.market.extract import (
         FakeMarketExtractor,
@@ -356,7 +395,7 @@ async def run_market(request: Request):
 
     # Load user profile if available
     user_profile = None
-    profile_path = settings.data_dir / "user_profile.yml"
+    profile_path = data_dir / "user_profile.yml"
     if profile_path.exists():
         try:
             user_profile = load_user_profile(profile_path)
@@ -366,8 +405,6 @@ async def run_market(request: Request):
     async def _run():
         session = make_session(engine)
         try:
-            # run_market_pipeline is synchronous — run in a thread so the
-            # event loop stays free and SSE progress events stream in real time.
             summary = await asyncio.to_thread(
                 run_market_pipeline,
                 session,
@@ -387,15 +424,15 @@ async def run_market(request: Request):
 @router.post("/api/run/report")
 async def run_report(request: Request):
     """Generate a daily report (fast, no SSE needed)."""
-    settings = request.app.state.settings
     engine = request.app.state.engine
+    data_dir = get_user_data_dir(request)
 
     from job_hunter.db.repo import make_session
     from job_hunter.reporting.report import generate_report
 
     session = make_session(engine)
     try:
-        summary = generate_report(session=session, data_dir=settings.data_dir)
+        summary = generate_report(session=session, data_dir=data_dir)
         return JSONResponse({
             "date": summary.get("date"),
             "md_path": str(summary.get("md_path", "")),

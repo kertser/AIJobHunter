@@ -19,6 +19,25 @@
 
   <div id="setup-form">
     <form id="onboarding-form" enctype="multipart/form-data" onsubmit="startGeneration(event)">
+      {% if not is_mock %}
+      <fieldset style="margin-bottom: 1.5rem; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.2rem;">
+        <legend style="font-weight: 600; font-size: 0.95rem;">🔑 OpenAI API Key</legend>
+        {% if has_api_key %}
+        <p style="margin: 0 0 0.5rem; font-size: 0.85rem; color: #059669;">
+          ✅ An API key is already configured. Leave blank to keep using it, or enter a new one to replace it.
+        </p>
+        {% else %}
+        <p style="margin: 0 0 0.5rem; font-size: 0.85rem; color: #b45309;">
+          ⚠️ No API key found. Profile generation requires an OpenAI API key.
+          <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get one here →</a>
+        </p>
+        {% endif %}
+        <input type="password" name="openai_api_key" id="api-key-input"
+               placeholder="sk-..."
+               {% if not has_api_key %}required{% endif %}>
+      </fieldset>
+      {% endif %}
+
       <label>
         Resume PDF <small>(required)</small>
         <input type="file" name="resume" accept=".pdf" required id="resume-input">
@@ -38,7 +57,7 @@
   <div id="progress-area" style="display: none; margin-top: 1.5rem;">
     <h3>⏳ Generating…</h3>
     <progress id="gen-progress"></progress>
-    <div id="progress-log" style="margin-top: 1rem;"></div>
+    <div id="progress-log" style="margin-top: 1rem; font-family: monospace; font-size: 0.82rem; background: #0f172a; color: #cbd5e1; padding: 0.8rem 1rem; border-radius: 8px; max-height: 300px; overflow-y: auto; white-space: pre-wrap;"></div>
   </div>
 
   <!-- Results area (hidden initially) -->
@@ -95,28 +114,36 @@ function pollProgress() {
   var log = document.getElementById('progress-log');
   var es = new EventSource('/api/run/status');
 
-  es.onmessage = function(e) {
-    try {
-      var data = JSON.parse(e.data);
-      // Append log messages
-      if (data.log) {
-        log.textContent += data.log + '\n';
-        log.scrollTop = log.scrollHeight;
-      }
-    } catch(err) {}
-  };
+  // Named SSE events (matching the server-side event types)
+  es.addEventListener('progress', function(e) {
+    log.textContent += e.data + '\n';
+    log.scrollTop = log.scrollHeight;
+  });
 
-  // Also poll task-status endpoint
+  es.addEventListener('complete', function(e) {
+    log.textContent += '✅ ' + e.data + '\n';
+    es.close();
+  });
+
+  es.addEventListener('task_error', function(e) {
+    log.textContent += '❌ ' + e.data + '\n';
+    es.close();
+  });
+
+  es.addEventListener('ping', function() { /* keepalive */ });
+
+  // Also poll task-status endpoint for final result
   var interval = setInterval(function() {
     fetch('/api/run/task-status').then(function(r) { return r.json(); })
     .then(function(status) {
       if (!status.running) {
         clearInterval(interval);
         es.close();
-        if (status.error) {
-          showError(status.error);
+        var result = status.last_result;
+        if (result && result.error) {
+          showError(result.error);
         } else {
-          showResults(status.result);
+          showResults(result);
         }
       }
     });

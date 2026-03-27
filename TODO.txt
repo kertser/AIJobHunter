@@ -1,6 +1,5 @@
 TODO:
-- Add automated daily discover+score+apply cycle with GUI controls for scheduling and pausing
-- Email/Slack notifications - Notify when new high-fit jobs are found.
+- Need to build multi-user support for the application, allowing multiple users to create and manage their own profiles and job applications.
+It includes security keys management and user authentication.
 - Implement manual apply on company website with AI assistance - Use AI to fill out application forms on company websites, reducing manual effort.
-- Containerize the application for easier deployment and scalability.
 - Add support for multiple job boards to increase the number of job opportunities.

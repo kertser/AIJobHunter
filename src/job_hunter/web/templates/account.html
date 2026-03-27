@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Account — AI Job Hunter{% endblock %}
+{% block content %}
+<h2>👤 Account Settings</h2>
+<p style="color: var(--pico-muted-color); font-size: 0.85rem; margin-top: -0.5rem;">
+  Manage your personal information and password.
+</p>
+
+<!-- ═══ Profile ═══ -->
+<article class="card" style="margin-bottom: 1.5rem;">
+  <h3 style="margin-top: 0;">Profile</h3>
+  <form id="profile-form">
+    <label>
+      Display Name
+      <input type="text" name="display_name" id="acc-display-name"
+             value="{{ user.display_name }}" placeholder="Your name">
+    </label>
+    <label>
+      Email Address
+      <input type="email" name="email" id="acc-email"
+             value="{{ user.email }}" placeholder="you@example.com">
+    </label>
+    <div style="display: flex; gap: 0.6rem; align-items: center;">
+      <button type="submit">Save Profile</button>
+      <span id="profile-msg" style="font-size: 0.82rem;"></span>
+    </div>
+  </form>
+</article>
+
+<!-- ═══ Password ═══ -->
+<article class="card" style="margin-bottom: 1.5rem;">
+  <h3 style="margin-top: 0;">Change Password</h3>
+  <form id="password-form">
+    <label>
+      Current Password
+      <input type="password" name="current_password" id="acc-current-pw"
+             required placeholder="Enter current password">
+    </label>
+    <div class="grid">
+      <label>
+        New Password
+        <input type="password" name="new_password" id="acc-new-pw"
+               required minlength="8" placeholder="At least 8 characters">
+      </label>
+      <label>
+        Confirm New Password
+        <input type="password" name="confirm_password" id="acc-confirm-pw"
+               required minlength="8" placeholder="Repeat new password">
+      </label>
+    </div>
+    <div style="display: flex; gap: 0.6rem; align-items: center;">
+      <button type="submit" class="secondary">Change Password</button>
+      <span id="password-msg" style="font-size: 0.82rem;"></span>
+    </div>
+  </form>
+</article>
+
+<!-- ═══ Account Info ═══ -->
+<article class="card" style="margin-bottom: 1.5rem;">
+  <h3 style="margin-top: 0;">Account Info</h3>
+  <table role="grid" style="font-size: 0.85rem;">
+    <tbody>
+      <tr><td style="font-weight: 600; width: 160px;">User ID</td><td style="font-family: monospace; font-size: 0.78rem;">{{ user.id }}</td></tr>
+      <tr><td style="font-weight: 600;">Role</td><td>{% if user.is_admin %}🛡️ Admin{% else %}👤 User{% endif %}</td></tr>
+      <tr><td style="font-weight: 600;">Status</td><td>{% if user.is_active %}<span style="color: #16a34a;">● Active</span>{% else %}<span style="color: #dc2626;">● Inactive</span>{% endif %}</td></tr>
+      <tr><td style="font-weight: 600;">Registered</td><td>{{ user.created_at | datefmt }}</td></tr>
+      <tr><td style="font-weight: 600;">Last Login</td><td>{{ user.last_login | datefmt }}</td></tr>
+    </tbody>
+  </table>
+</article>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// ── Profile form ──
+document.getElementById('profile-form').addEventListener('submit', function(e) {
+  e.preventDefault();
+  var msg = document.getElementById('profile-msg');
+  msg.textContent = 'Saving…';
+  msg.style.color = 'var(--pico-muted-color)';
+
+  fetch('/api/account/profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      display_name: document.getElementById('acc-display-name').value,
+      email: document.getElementById('acc-email').value,
+    }),
+  })
+  .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+  .then(function(res) {
+    if (res.ok) {
+      msg.textContent = '✓ Profile updated';
+      msg.style.color = '#16a34a';
+      // Update nav display name
+      var el = document.getElementById('user-name-link');
+      if (el) el.textContent = '👤 ' + (res.data.display_name || res.data.email);
+    } else {
+      msg.textContent = '✗ ' + (res.data.error || 'Failed');
+      msg.style.color = '#dc2626';
+    }
+  })
+  .catch(function() {
+    msg.textContent = '✗ Network error';
+    msg.style.color = '#dc2626';
+  });
+});
+
+// ── Password form ──
+document.getElementById('password-form').addEventListener('submit', function(e) {
+  e.preventDefault();
+  var msg = document.getElementById('password-msg');
+  var newPw = document.getElementById('acc-new-pw').value;
+  var confirmPw = document.getElementById('acc-confirm-pw').value;
+
+  if (newPw !== confirmPw) {
+    msg.textContent = '✗ Passwords do not match';
+    msg.style.color = '#dc2626';
+    return;
+  }
+
+  msg.textContent = 'Saving…';
+  msg.style.color = 'var(--pico-muted-color)';
+
+  fetch('/api/account/password', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      current_password: document.getElementById('acc-current-pw').value,
+      new_password: newPw,
+      confirm_password: confirmPw,
+    }),
+  })
+  .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+  .then(function(res) {
+    if (res.ok) {
+      msg.textContent = '✓ Password changed';
+      msg.style.color = '#16a34a';
+      document.getElementById('password-form').reset();
+    } else {
+      msg.textContent = '✗ ' + (res.data.error || 'Failed');
+      msg.style.color = '#dc2626';
+    }
+  })
+  .catch(function() {
+    msg.textContent = '✗ Network error';
+    msg.style.color = '#dc2626';
+  });
+});
+</script>
+{% endblock %}
+

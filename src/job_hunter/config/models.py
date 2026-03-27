@@ -49,6 +49,11 @@ class AppSettings(BaseSettings):
     email_provider: str = "resend"
     resend_api_key: str = ""
 
+    # Auth / multi-user
+    secret_key: str = ""          # JWT signing key (auto-generated if empty)
+    registration_enabled: bool = True  # allow self-registration
+    admin_password: str = ""      # separate password to access admin panel
+
 
 class SearchProfile(BaseModel):
     """A single job-search profile loaded from YAML."""

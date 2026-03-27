@@ -53,9 +53,22 @@
         <input name="education" value="{{ user_profile.education | join(', ') }}">
       </label>
     </div>
-    <label>Languages <small>(comma-separated)</small>
-      <input name="languages" value="{{ user_profile.languages | join(', ') }}">
-    </label>
+    <div class="grid">
+      <label>Spoken Languages <small>(comma-separated)</small>
+        <input name="spoken_languages" value="{{ user_profile.spoken_languages | join(', ') }}">
+      </label>
+      <label>Programming Languages <small>(comma-separated)</small>
+        <input name="programming_languages" value="{{ user_profile.programming_languages | join(', ') }}">
+      </label>
+    </div>
+    <div class="grid">
+      <label>Preferred Industries <small>(comma-separated)</small>
+        <input name="preferred_industries" value="{{ user_profile.preferred_industries | join(', ') }}">
+      </label>
+      <label>Disliked Industries <small>(comma-separated)</small>
+        <input name="disliked_industries" value="{{ user_profile.disliked_industries | join(', ') }}">
+      </label>
+    </div>
   </fieldset>
   <button type="submit">💾 Save User Profile</button>
 </form>
@@ -165,7 +178,10 @@ function saveUserProfile(e) {
     desired_roles: csvToList(fd.get('desired_roles')),
     preferred_locations: csvToList(fd.get('preferred_locations')),
     education: csvToList(fd.get('education')),
-    languages: csvToList(fd.get('languages')),
+    spoken_languages: csvToList(fd.get('spoken_languages')),
+    programming_languages: csvToList(fd.get('programming_languages')),
+    preferred_industries: csvToList(fd.get('preferred_industries')),
+    disliked_industries: csvToList(fd.get('disliked_industries')),
   };
   fetch('/api/user-profile', {
     method: 'PUT',

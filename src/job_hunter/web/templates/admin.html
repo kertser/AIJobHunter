@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+{% block title %}Admin — AI Job Hunter{% endblock %}
+{% block content %}
+
+<!-- ── Password gate ── -->
+<div id="admin-gate" style="display: none; max-width: 420px; margin: 4rem auto;">
+  <h2>🔐 Admin Access</h2>
+  <p style="color: var(--pico-muted-color); font-size: 0.85rem;">
+    Enter the admin password to continue.
+  </p>
+  <form onsubmit="submitAdminPassword(event)">
+    <input type="password" id="admin-pw-input" placeholder="Admin password" required autofocus>
+    <div id="admin-pw-error" style="color:#dc2626; font-size:0.82rem; margin-top:-0.5rem; display:none;"></div>
+    <button type="submit" style="margin-top: 0.5rem;">Unlock</button>
+  </form>
+</div>
+
+<!-- ── Admin content (hidden until authenticated) ── -->
+<div id="admin-content" style="display: none;">
+
+  <!-- User Management -->
+  <h2>🛡️ User Management</h2>
+  <p style="color: var(--pico-muted-color); font-size: 0.85rem;">
+    Manage accounts, activate/deactivate users, and assign admin roles.
+  </p>
+
+  <div id="users-loading" style="text-align: center; padding: 2rem;">
+    <span aria-busy="true">Loading users…</span>
+  </div>
+
+  <table id="users-table" style="display: none;">
+    <thead>
+      <tr>
+        <th>Email</th>
+        <th>Display Name</th>
+        <th>Admin</th>
+        <th>Active</th>
+        <th>Created</th>
+        <th>Last Login</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="users-body"></tbody>
+  </table>
+
+  <!-- Profile Management -->
+  <hr style="margin: 2.5rem 0;">
+  <h2>📋 Profile Management</h2>
+  <p style="color: var(--pico-muted-color); font-size: 0.85rem;">
+    View and remove any user's profile data.
+  </p>
+
+  <div id="profiles-loading" style="text-align: center; padding: 2rem;">
+    <span aria-busy="true">Loading profiles…</span>
+  </div>
+
+  <table id="profiles-table" style="display: none;">
+    <thead>
+      <tr>
+        <th>Email</th>
+        <th>Display Name</th>
+        <th>User Profile</th>
+        <th>Search Profiles</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="profiles-body"></tbody>
+  </table>
+
+  <!-- Danger Zone -->
+  <hr style="margin: 2.5rem 0;">
+  <h2 style="color: #dc2626;">⚠️ Danger Zone</h2>
+  <p style="color: var(--pico-muted-color); font-size: 0.85rem;">
+    Irreversible actions. Proceed with extreme caution.
+  </p>
+  <div style="border: 2px solid #fca5a5; border-radius: 10px; padding: 1.2rem; background: #fef2f2;">
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+      <div>
+        <strong style="color: #991b1b;">Reset Entire Database</strong>
+        <p style="margin: 0.2rem 0 0; font-size: 0.82rem; color: #7f1d1d;">
+          Drops <b>all</b> tables and re-creates them. Every job, user, application, market record, and profile reference will be permanently deleted. You will be logged out.
+        </p>
+      </div>
+      <button class="contrast" onclick="resetDatabase()" style="white-space: nowrap; flex-shrink: 0;">🗑️ Reset Database</button>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var _users = [];
+var _profiles = [];
+
+// ── Password gate logic ──
+function checkAdminGate() {
+  fetch('/api/admin/password-required')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.password_required) {
+        document.getElementById('admin-gate').style.display = '';
+      } else {
+        // No password needed — auto-authenticate and show content
+        fetch('/api/admin/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: '' }),
+        }).then(function() {
+          showAdminContent();
+        });
+      }
+    })
+    .catch(function(err) {
+      document.getElementById('admin-gate').style.display = '';
+      document.getElementById('admin-gate').innerHTML =
+        '<p style="color:#dc2626;">Failed to check admin status: ' + err + '</p>';
+    });
+}
+
+function submitAdminPassword(e) {
+  e.preventDefault();
+  var pw = document.getElementById('admin-pw-input').value;
+  var errEl = document.getElementById('admin-pw-error');
+  errEl.style.display = 'none';
+
+  fetch('/api/admin/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw }),
+  })
+  .then(function(r) {
+    if (!r.ok) return r.json().then(function(d) { throw new Error(d.detail || 'Failed'); });
+    return r.json();
+  })
+  .then(function() {
+    showAdminContent();
+  })
+  .catch(function(err) {
+    errEl.textContent = '❌ ' + err.message;
+    errEl.style.display = '';
+  });
+}
+
+function showAdminContent() {
+  document.getElementById('admin-gate').style.display = 'none';
+  document.getElementById('admin-content').style.display = '';
+  loadUsers();
+  loadProfiles();
+}
+
+// ── User management ──
+function loadUsers() {
+  fetch('/api/admin/users')
+    .then(function(r) {
+      if (r.status === 403) {
+        // Admin session expired — show gate again
+        document.getElementById('admin-content').style.display = 'none';
+        document.getElementById('admin-gate').style.display = '';
+        throw new Error('Admin session expired');
+      }
+      return r.json();
+    })
+    .then(function(data) {
+      _users = data.users || [];
+      renderUsers();
+      document.getElementById('users-loading').style.display = 'none';
+      document.getElementById('users-table').style.display = '';
+    })
+    .catch(function(err) {
+      document.getElementById('users-loading').innerHTML =
+        '<span style="color:#dc2626;">Failed to load users: ' + err + '</span>';
+    });
+}
+
+function renderUsers() {
+  var tbody = document.getElementById('users-body');
+  tbody.innerHTML = '';
+  _users.forEach(function(u) {
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + escHtml(u.email) + '</td>' +
+      '<td>' + escHtml(u.display_name || '—') + '</td>' +
+      '<td>' + (u.is_admin ? '⭐ Yes' : 'No') + '</td>' +
+      '<td>' + (u.is_active ? '✅ Active' : '🚫 Inactive') + '</td>' +
+      '<td>' + fmtDate(u.created_at) + '</td>' +
+      '<td>' + fmtDate(u.last_login) + '</td>' +
+      '<td>' + actionsHtml(u) + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function actionsHtml(u) {
+  var btns = '';
+  if (u.is_active) {
+    btns += '<button class="action-btn secondary outline" onclick="toggleActive(\'' + u.id + '\', false)" style="font-size:0.72rem;">Deactivate</button> ';
+  } else {
+    btns += '<button class="action-btn outline" onclick="toggleActive(\'' + u.id + '\', true)" style="font-size:0.72rem;">Activate</button> ';
+  }
+  if (u.is_admin) {
+    btns += '<button class="action-btn secondary outline" onclick="toggleAdmin(\'' + u.id + '\', false)" style="font-size:0.72rem;">Demote</button> ';
+  } else {
+    btns += '<button class="action-btn outline" onclick="toggleAdmin(\'' + u.id + '\', true)" style="font-size:0.72rem;">Promote</button> ';
+  }
+  btns += '<button class="action-btn contrast outline" onclick="deleteUser(\'' + u.id + '\')" style="font-size:0.72rem;">Delete</button>';
+  return btns;
+}
+
+function toggleActive(uid, val) {
+  patchUser(uid, { is_active: val });
+}
+
+function toggleAdmin(uid, val) {
+  patchUser(uid, { is_admin: val });
+}
+
+function patchUser(uid, body) {
+  fetch('/api/admin/users/' + uid, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  .then(function(r) {
+    if (!r.ok) return r.json().then(function(d) { throw new Error(d.detail || 'Failed'); });
+    showToast('User updated');
+    loadUsers();
+  })
+  .catch(function(err) { showToast('❌ ' + err.message); });
+}
+
+function deleteUser(uid) {
+  if (!confirm('Are you sure you want to delete this user?')) return;
+  fetch('/api/admin/users/' + uid, { method: 'DELETE' })
+    .then(function(r) {
+      if (!r.ok) return r.json().then(function(d) { throw new Error(d.detail || 'Failed'); });
+      showToast('User deleted');
+      loadUsers();
+      loadProfiles();
+    })
+    .catch(function(err) { showToast('❌ ' + err.message); });
+}
+
+// ── Profile management ──
+function loadProfiles() {
+  fetch('/api/admin/profiles')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      _profiles = data.profiles || [];
+      renderProfiles();
+      document.getElementById('profiles-loading').style.display = 'none';
+      document.getElementById('profiles-table').style.display = '';
+    })
+    .catch(function(err) {
+      document.getElementById('profiles-loading').innerHTML =
+        '<span style="color:#dc2626;">Failed to load profiles: ' + err + '</span>';
+    });
+}
+
+function renderProfiles() {
+  var tbody = document.getElementById('profiles-body');
+  tbody.innerHTML = '';
+  _profiles.forEach(function(p) {
+    var tr = document.createElement('tr');
+    var upInfo = p.has_user_profile
+      ? ('✅ ' + escHtml(p.user_profile_name || '—') + (p.user_profile_title ? ' (' + escHtml(p.user_profile_title) + ')' : ''))
+      : '<span style="color:var(--pico-muted-color);">None</span>';
+    var spInfo = p.search_profile_count > 0
+      ? (p.search_profile_count + ': ' + p.search_profile_names.map(escHtml).join(', '))
+      : '<span style="color:var(--pico-muted-color);">None</span>';
+
+    var btns = '';
+    if (p.has_user_profile) {
+      btns += '<button class="action-btn secondary outline" onclick="deleteProfile(\'' + p.id + '\', \'user-profile\')" style="font-size:0.72rem;">🗑️ User Profile</button> ';
+    }
+    if (p.search_profile_count > 0) {
+      btns += '<button class="action-btn secondary outline" onclick="deleteProfile(\'' + p.id + '\', \'search-profiles\')" style="font-size:0.72rem;">🗑️ Search Profiles</button> ';
+    }
+    if (p.has_user_profile || p.search_profile_count > 0) {
+      btns += '<button class="action-btn contrast outline" onclick="deleteAllProfiles(\'' + p.id + '\')" style="font-size:0.72rem;">🗑️ All</button>';
+    }
+    if (!btns) btns = '<span style="color:var(--pico-muted-color); font-size:0.82rem;">No profiles</span>';
+
+    tr.innerHTML =
+      '<td>' + escHtml(p.email) + '</td>' +
+      '<td>' + escHtml(p.display_name || '—') + '</td>' +
+      '<td>' + upInfo + '</td>' +
+      '<td>' + spInfo + '</td>' +
+      '<td>' + btns + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function deleteProfile(uid, kind) {
+  var label = kind === 'user-profile' ? 'user profile' : 'search profiles';
+  if (!confirm('Delete ' + label + ' for this user?')) return;
+  fetch('/api/admin/profiles/' + uid + '/' + kind, { method: 'DELETE' })
+    .then(function(r) {
+      if (!r.ok) return r.json().then(function(d) { throw new Error(d.detail || 'Failed'); });
+      showToast('Profile deleted');
+      loadProfiles();
+    })
+    .catch(function(err) { showToast('❌ ' + err.message); });
+}
+
+function deleteAllProfiles(uid) {
+  if (!confirm('Delete ALL profile data for this user?')) return;
+  fetch('/api/admin/profiles/' + uid, { method: 'DELETE' })
+    .then(function(r) {
+      if (!r.ok) return r.json().then(function(d) { throw new Error(d.detail || 'Failed'); });
+      showToast('All profiles deleted');
+      loadProfiles();
+    })
+    .catch(function(err) { showToast('❌ ' + err.message); });
+}
+
+// ── Utilities ──
+function escHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try {
+    var d = new Date(iso);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  } catch(e) { return iso; }
+}
+
+// ── Database reset ──
+function resetDatabase() {
+  if (!confirm('⚠️ This will permanently DELETE ALL DATA — jobs, users, applications, market records, everything.\n\nAre you sure?')) return;
+  if (!confirm('FINAL WARNING: This cannot be undone. Type OK to proceed.\n\nReally reset the entire database?')) return;
+
+  fetch('/api/admin/reset-db', { method: 'POST' })
+    .then(function(r) {
+      if (!r.ok) return r.json().then(function(d) { throw new Error(d.detail || 'Failed'); });
+      return r.json();
+    })
+    .then(function() {
+      alert('Database has been reset. You will now be redirected to register a new account.');
+      window.location.href = '/register';
+    })
+    .catch(function(err) {
+      showToast('❌ ' + err.message);
+    });
+}
+
+// ── Init ──
+checkAdminGate();
+</script>
+{% endblock %}

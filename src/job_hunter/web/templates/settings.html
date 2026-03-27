@@ -6,18 +6,27 @@
 <form id="settings-form">
   <h3>🔧 Runtime</h3>
   <div class="grid">
-    <label>
-      <input type="checkbox" name="mock" role="switch" {% if settings.mock %}checked{% endif %}>
-      Mock Mode
-    </label>
-    <label>
-      <input type="checkbox" name="dry_run" role="switch" {% if settings.dry_run %}checked{% endif %}>
-      Dry Run
-    </label>
-    <label>
-      <input type="checkbox" name="headless" role="switch" {% if settings.headless %}checked{% endif %}>
-      Headless Browser
-    </label>
+    <div>
+      <label>
+        <input type="checkbox" name="mock" role="switch" {% if settings.mock %}checked{% endif %}>
+        Mock Mode
+      </label>
+      <small style="color: var(--pico-muted-color); display: block; margin-top: -0.6rem;">Use a local fake LinkedIn site instead of the real one. For testing only.</small>
+    </div>
+    <div>
+      <label>
+        <input type="checkbox" name="dry_run" role="switch" {% if settings.dry_run %}checked{% endif %}>
+        Dry Run
+      </label>
+      <small style="color: var(--pico-muted-color); display: block; margin-top: -0.6rem;">Go through the full apply flow but stop before clicking Submit. Safe preview of what would happen.</small>
+    </div>
+    <div>
+      <label>
+        <input type="checkbox" name="headless" role="switch" {% if settings.headless %}checked{% endif %}>
+        Headless Browser
+      </label>
+      <small style="color: var(--pico-muted-color); display: block; margin-top: -0.6rem;">Run the browser invisibly in the background.</small>
+    </div>
   </div>
 
   <div class="grid">

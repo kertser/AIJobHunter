@@ -24,6 +24,7 @@ and matches your skills against market demand.
   - [Step 5: Run for Real](#step-5-run-for-real)
   - [Step 6: Market Intelligence (Optional)](#step-6-market-intelligence-optional)
 - [Web GUI](#web-gui)
+- [Authentication & Multi-User](#authentication--multi-user)
 - [Scheduling](#scheduling)
 - [Email Notifications](#email-notifications)
 - [Operating Modes](#operating-modes)
@@ -61,6 +62,7 @@ and matches your skills against market demand.
 | **Challenge detection** | Pauses on captcha, marks job as BLOCKED — no bypass attempts |
 | **Market Intelligence** | Technology trend analysis, role archetypes, candidate–role matching, gap analysis |
 | **Web GUI** | Full command & control dashboard (FastAPI + HTMX + Pico CSS) |
+| **Multi-user auth** | JWT login, per-user settings & API keys, account management, admin panel |
 | **Visual dashboard** | Donut chart, fit histogram, skill gap bars, activity timeline, market panel |
 | **Scheduled runs** | APScheduler cron-based automation with configurable days, time, and pipeline mode |
 | **Email notifications** | Pipeline summary emails via Resend API or SMTP (Gmail, Outlook, custom) |
@@ -264,11 +266,51 @@ Open **http://localhost:8000** in your browser.
 | **Profiles** | `/profiles` | Edit user profile and search profiles (skills, keywords, thresholds) |
 | **Resume Review** | `/resume-review` | AI gap analysis — missing skills, improvement suggestions, quick wins |
 | **Reports** | `/reports` | Browse and view daily pipeline + market reports |
+| **Account** | `/account` | Personal account settings — edit display name, email, change password |
 | **Settings** | `/settings` | Toggle mock/dry-run/headless, configure email notifications, update API keys |
 | **Schedule** | `/schedule` | Cron-style automation — set time, days, pipeline mode, view run history |
+| **Admin** | `/admin` | User management, profile management, database reset (admin-password protected) |
 | **Setup** | `/onboarding` | Upload resume PDF + LinkedIn URL to generate profiles (first-run wizard) |
 
 **Live progress streaming:** Pipeline and market operations stream real-time progress via Server-Sent Events (SSE) — you see each step as it happens, with keepalive pings during long operations.
+
+---
+
+## Authentication & Multi-User
+
+The web GUI is login-protected. All pages (except login/register) require a valid session.
+
+### Registration & Login
+
+1. **First user** — when no users exist, the registration page is shown automatically. The first registered user is auto-promoted to **admin** and can optionally set the **admin panel password**.
+2. **Subsequent users** — can register while `JOBHUNTER_REGISTRATION_ENABLED=true` (default).
+3. **Sessions** — JWT-based via `access_token` cookie (7-day expiry). Logging in from another browser/device replaces the session.
+
+### Account Settings
+
+Click your **name in the top navigation bar** to open `/account`, where you can:
+- Change your **display name** and **email address**
+- **Change your password** (requires current password)
+- View account info: user ID, role, status, registration date, last login
+
+### Per-User Settings
+
+Each user can override global settings from the **Settings** page:
+- **OpenAI API key** — each user can set their own key
+- **Runtime flags** — mock mode, dry-run, headless, slow-mo
+- **Email notifications** — provider, credentials, recipient
+
+Settings that are left unset on the user row inherit from the global `AppSettings` (`.env` file).
+
+### Admin Panel
+
+The admin panel (`/admin`) is protected by a standalone **admin password** (not tied to any user account). If no admin password is configured, any logged-in user can access it.
+
+The admin panel provides:
+- User management — activate/deactivate, promote/demote admin, delete users
+- Database reset — erase all data and start fresh (including admin password)
+
+Set the admin password via `JOBHUNTER_ADMIN_PASSWORD` in `.env`, during first-user registration, or from the admin panel itself.
 
 ---
 
@@ -504,6 +546,9 @@ uv run hunt --real --dry-run serve
 | `JOBHUNTER_OPENAI_API_KEY` | For real use | `""` | OpenAI API key |
 | `JOBHUNTER_LLM_PROVIDER` | No | `"openai"` | LLM provider |
 | `JOBHUNTER_DATA_DIR` | No | `"data"` | Path to the data directory |
+| `JOBHUNTER_SECRET_KEY` | No | auto-generated | JWT signing key (auto-persisted on first run) |
+| `JOBHUNTER_ADMIN_PASSWORD` | No | `""` | Admin panel password (empty = no gate) |
+| `JOBHUNTER_REGISTRATION_ENABLED` | No | `true` | Allow new user registration |
 | `JOBHUNTER_EMAIL_PROVIDER` | No | `"resend"` | Email provider: `resend` or `smtp` |
 | `JOBHUNTER_RESEND_API_KEY` | For Resend | `""` | Resend API key |
 | `JOBHUNTER_NOTIFICATION_EMAIL` | For email | `""` | Notification recipient email |
@@ -600,6 +645,7 @@ data/
 ├── cookies.json           ← LinkedIn session cookies (after hunt login)
 ├── schedule.yml           ← scheduler configuration (time, days, mode)
 ├── schedule_history.yml   ← last 100 scheduled run records
+├── users/                 ← per-user data directories (data/users/<user_id>/)
 └── reports/               ← daily Markdown + JSON reports
 ```
 
@@ -678,6 +724,11 @@ AIJobHunter/
 ├── src/job_hunter/
 │   ├── cli.py                            # Typer CLI — all commands + market sub-app
 │   │
+│   ├── auth/
+│   │   ├── models.py                     # User ORM — credentials, per-user settings
+│   │   ├── repo.py                       # CRUD: create, authenticate, update profile/password
+│   │   └── security.py                   # bcrypt hashing, JWT tokens, admin tokens
+│   │
 │   ├── config/
 │   │   ├── models.py                     # AppSettings, SearchProfile, UserProfile, ScheduleConfig
 │   │   └── loader.py                     # YAML load/save, settings factory, .env persistence
@@ -753,6 +804,9 @@ AIJobHunter/
 │   │   ├── deps.py                       # Dependency injection
 │   │   ├── task_manager.py               # Background tasks + SSE broadcasting
 │   │   ├── routers/
+│   │   │   ├── auth.py                   # Login, register, logout, /api/auth/me
+│   │   │   ├── account.py                # Account settings — profile & password
+│   │   │   ├── admin.py                  # Admin panel — user mgmt, DB reset
 │   │   │   ├── dashboard.py              # Visual stats + charts + market panel
 │   │   │   ├── jobs.py                   # Jobs CRUD + bulk actions + market boost
 │   │   │   ├── onboarding.py             # First-run profile wizard
@@ -882,6 +936,7 @@ docker run -d -p 8000:8000 -v ./data:/app/data --env-file .env ai-job-hunter
 | **14** | Market Intelligence — UI panels, reporting, evaluation | ✅ |
 | **15** | Operational integration — pipeline, SSE, title normalisation | ✅ |
 | **16** | Scheduled pipelines, email notifications (Resend + SMTP), Docker | ✅ |
+| **17** | Multi-user authentication, account management, admin panel | ✅ |
 | **Next** | Outcome learning, career trajectory parsing, fairness-aware reranking | 🔜 |
 
 ---

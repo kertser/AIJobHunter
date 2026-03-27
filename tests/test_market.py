@@ -1383,24 +1383,44 @@ class TestMarketRunWeb:
         from job_hunter.config.models import AppSettings
         from job_hunter.web.app import create_app
 
-        settings = AppSettings(data_dir=tmp_path, mock=True, dry_run=True, openai_api_key="")
-        (tmp_path / "user_profile.yml").write_text(
-            "name: Test User\ntitle: Dev\nskills:\n  - Python\n  - Docker\n"
+        settings = AppSettings(
+            data_dir=tmp_path, mock=True, dry_run=True, openai_api_key="",
+            secret_key="test-secret-key-for-jwt",
         )
         app = create_app(settings)
 
         engine = get_memory_engine()
         init_db(engine)
         app.state.engine = engine
+        app.state.dotenv_path = tmp_path / ".env"
+
+        # Create a test user for auth
+        from job_hunter.auth.repo import create_user, get_user_data_dir
+        session = make_session(engine)
+        test_user = create_user(
+            session, email="market@example.com", password="testpass123",
+            display_name="Market Tester", is_admin=True,
+        )
+        test_user_id = str(test_user.id)
+
+        # Create user_profile.yml in per-user data dir
+        user_data_dir = get_user_data_dir(tmp_path, test_user.id)
+        (user_data_dir / "user_profile.yml").write_text(
+            "name: Test User\ntitle: Dev\nskills:\n  - Python\n  - Docker\n"
+        )
+        # Also keep global copy for backward compat
+        (tmp_path / "user_profile.yml").write_text(
+            "name: Test User\ntitle: Dev\nskills:\n  - Python\n  - Docker\n"
+        )
 
         # Seed jobs
-        session = make_session(engine)
         jobs = [
             Job(
                 external_id="mr1", url="/j/mr1", title="Python Dev", company="TestCo",
                 hash=job_hash(external_id="mr1", title="Python Dev", company="TestCo"),
                 easy_apply=True, status=JobStatus.NEW, location="Remote",
                 description_text="Python developer with Docker and SQL.",
+                user_id=test_user.id,
             ),
         ]
         for j in jobs:
@@ -1409,6 +1429,10 @@ class TestMarketRunWeb:
         session.close()
 
         with TestClient(app) as c:
+            # Set auth cookie
+            from job_hunter.auth.security import create_access_token
+            token = create_access_token(test_user_id, app.state.secret_key)
+            c.cookies.set("access_token", token)
             yield c
 
     def test_market_run_starts(self, run_client):
