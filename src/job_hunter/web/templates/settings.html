@@ -125,6 +125,13 @@
         <p id="li-verify-hint" style="font-size: 0.84rem; margin: 0 0 0.5rem; font-weight: 500;">
           LinkedIn sent a verification code. Enter it below:
         </p>
+        <div id="li-screenshot-wrap" style="display:none; margin-bottom: 0.6rem; text-align: center;">
+          <p style="font-size: 0.8rem; color: var(--pico-muted-color); margin: 0 0 0.3rem;">
+            📸 This is what LinkedIn is showing on the server:
+          </p>
+          <img id="li-screenshot" src="" alt="Checkpoint screenshot"
+               style="max-width: 100%; border: 1px solid var(--pico-muted-border-color); border-radius: 6px;">
+        </div>
         <div style="display: flex; gap: 0.6rem; align-items: end; flex-wrap: wrap;">
           <label style="margin-bottom: 0; flex: 1; min-width: 180px;">
             Verification Code
@@ -367,19 +374,31 @@
     _loginSSE = new EventSource('/api/run/status');
 
     _loginSSE.addEventListener('progress', function(e) {
-      _liLog(e.data);
+      var d = e.data || '';
+
+      // Intercept screenshot markers — don't dump them to the text log
+      if (d.indexOf('SCREENSHOT:') === 0) {
+        var fname = d.substring('SCREENSHOT:'.length);
+        var img = document.getElementById('li-screenshot');
+        var wrap = document.getElementById('li-screenshot-wrap');
+        img.src = '/api/settings/checkpoint-screenshot?name=' + encodeURIComponent(fname) + '&_t=' + Date.now();
+        wrap.style.display = '';
+        document.getElementById('li-verify-section').style.display = '';
+        _liLog('📸 Screenshot: ' + fname);
+        return;
+      }
+
+      _liLog(d);
+
       // Show verification input when the task is waiting for a code
-      if (e.data) {
-        var d = e.data;
-        if (d.indexOf('Waiting for verification code') !== -1) {
-          document.getElementById('li-verify-section').style.display = '';
-          document.getElementById('li-verify-code').focus();
-        }
-        // Update the hint text with whatever LinkedIn told us
-        if (d.indexOf('Code requested') !== -1 || d.indexOf('Verification required') !== -1) {
-          document.getElementById('li-verify-section').style.display = '';
-          document.getElementById('li-verify-hint').textContent = d;
-        }
+      if (d.indexOf('Waiting for verification code') !== -1) {
+        document.getElementById('li-verify-section').style.display = '';
+        document.getElementById('li-verify-code').focus();
+      }
+      // Update the hint text with whatever LinkedIn told us
+      if (d.indexOf('Code requested') !== -1 || d.indexOf('Verification required') !== -1) {
+        document.getElementById('li-verify-section').style.display = '';
+        document.getElementById('li-verify-hint').textContent = d;
       }
     });
     _loginSSE.addEventListener('complete', function(e) {
@@ -404,6 +423,7 @@
     document.getElementById('li-login-btn').disabled = false;
     document.getElementById('li-login-btn').textContent = '🔑 Log In to LinkedIn';
     document.getElementById('li-verify-section').style.display = 'none';
+    document.getElementById('li-screenshot-wrap').style.display = 'none';
     document.getElementById('li-password').value = '';
     refreshCookiesStatus();
   }

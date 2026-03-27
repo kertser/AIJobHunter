@@ -138,6 +138,7 @@ class LinkedInSession:
         slowmo_ms: int = 300,
         on_progress: Callable[[str], None] | None = None,
         get_verification_code: Callable[[], Any] | None = None,
+        screenshot_dir: Path | None = None,
     ) -> dict[str, str]:
         """Programmatic login for headless / remote-server environments.
 
@@ -151,9 +152,14 @@ class LinkedInSession:
         5. On failure returns ``{"status": "error", "detail": "..."}``.
 
         *on_progress* is called with human-readable status messages (suitable
-        for SSE streaming).
+        for SSE streaming).  Screenshots of checkpoint pages are saved into
+        *screenshot_dir* (defaults to the cookies directory) and announced
+        via ``SCREENSHOT:<filename>`` progress messages.
         """
         from playwright.async_api import async_playwright
+
+        ss_dir = screenshot_dir or self.cookies_path.parent
+        ss_dir.mkdir(parents=True, exist_ok=True)
 
         def _progress(msg: str) -> None:
             logger.info(msg)
@@ -189,6 +195,7 @@ class LinkedInSession:
                     password=password,
                     progress=_progress,
                     get_verification_code=get_verification_code,
+                    screenshot_dir=ss_dir,
                 )
             finally:
                 await browser.close()
@@ -204,6 +211,7 @@ class LinkedInSession:
         password: str,
         progress: Callable[[str], None],
         get_verification_code: Callable[[], Any] | None,
+        screenshot_dir: Path,
     ) -> dict[str, str]:
         """Core login logic (extracted for readability)."""
 
@@ -262,13 +270,18 @@ class LinkedInSession:
         if self._is_checkpoint(url):
             progress("LinkedIn is requesting a security check…")
 
+            # Wait extra time for challenge iframes / CAPTCHAs to render
+            progress("Waiting for challenge page to fully load…")
+            await page.wait_for_timeout(3000)
+
+            # Take initial screenshot
+            await self._take_screenshot(page, screenshot_dir, "checkpoint_initial", progress)
+
             # Dump page text for diagnostics
             page_text = await self._get_visible_text(page)
             progress(f"Page content: {page_text[:500]}")
 
-            # Step 1: Try to trigger code delivery — LinkedIn checkpoint
-            # pages often require clicking a "Send code" / "Submit" button
-            # BEFORE any code is actually sent to the user.
+            # Step 1: Try to trigger code delivery
             sent = await self._try_trigger_code_send(page, progress)
 
             # Re-read URL — clicking may have navigated
@@ -279,7 +292,12 @@ class LinkedInSession:
                 progress(f"✅ Saved cookies to {self.cookies_path}")
                 return {"status": "success"}
 
-            # Step 2: Extract a human-readable hint from the (possibly updated) page
+            # Take post-trigger screenshot (page may have changed)
+            if sent:
+                await page.wait_for_timeout(1500)
+                await self._take_screenshot(page, screenshot_dir, "checkpoint_after_send", progress)
+
+            # Step 2: Extract a human-readable hint
             hint = await self._get_checkpoint_hint(page)
             if sent:
                 progress(f"Code requested — check your email / phone. ({hint})")
@@ -296,11 +314,15 @@ class LinkedInSession:
                 if not code:
                     return {"status": "verification_needed", "hint": hint}
 
-                return await self._submit_verification(page, context, code, progress)
+                result = await self._submit_verification(page, context, code, progress)
+                # Screenshot after verification attempt
+                await self._take_screenshot(page, screenshot_dir, "checkpoint_after_verify", progress)
+                return result
             else:
                 return {"status": "verification_needed", "hint": hint}
 
         # --- UNKNOWN STATE ---
+        await self._take_screenshot(page, screenshot_dir, "unexpected_page", progress)
         page_text = await self._get_visible_text(page)
         progress(f"Unexpected post-login page: {url}")
         progress(f"Page content: {page_text[:400]}")
@@ -356,6 +378,28 @@ class LinkedInSession:
 
         progress(f"Unexpected page after verification: {url}")
         return {"status": "error", "detail": f"Unexpected page after verification: {url}"}
+
+    @staticmethod
+    async def _take_screenshot(
+        page: Any,
+        screenshot_dir: Path,
+        name: str,
+        progress: Callable[[str], None],
+    ) -> Path | None:
+        """Save a full-page screenshot and announce it via progress.
+
+        The frontend detects the ``SCREENSHOT:<filename>`` marker and
+        renders the image via ``/api/settings/checkpoint-screenshot``.
+        """
+        try:
+            path = screenshot_dir / f"{name}.png"
+            await page.screenshot(path=str(path), full_page=True)
+            progress(f"SCREENSHOT:{name}.png")
+            logger.debug("Screenshot saved: %s", path)
+            return path
+        except Exception as exc:
+            logger.warning("Failed to take screenshot: %s", exc)
+            return None
 
     @staticmethod
     def _is_logged_in(url: str) -> bool:

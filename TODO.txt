@@ -1,5 +1,2 @@
 TODO:
-- Need to build multi-user support for the application, allowing multiple users to create and manage their own profiles and job applications.
-It includes security keys management and user authentication.
-- Implement manual apply on company website with AI assistance - Use AI to fill out application forms on company websites, reducing manual effort.
-- Add support for multiple job boards to increase the number of job opportunities.
+- Change OpenAI to local LLM (similar or better than GPT-4o).
