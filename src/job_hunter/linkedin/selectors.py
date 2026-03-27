@@ -270,15 +270,27 @@ RECAPTCHA_IFRAME_SELECTORS = [
     'iframe[src*="recaptcha/enterprise/anchor"]',
     'iframe[src*="google.com/recaptcha"]',
     'iframe[title="reCAPTCHA"]',
-    'iframe[title*="recaptcha"]',
+    # CSS attribute selectors are case-sensitive — cover both cases
+    'iframe[title*="reCAPTCHA"]',
+    'iframe[title*="recaptcha" i]',
+]
+
+# URL substrings used to identify reCAPTCHA frames via page.frames enumeration
+# (more reliable than CSS selectors when the iframe loads asynchronously).
+RECAPTCHA_FRAME_URL_PATTERNS = [
+    "google.com/recaptcha",
+    "recaptcha/api2/anchor",
+    "recaptcha/enterprise/anchor",
+    "recaptcha/api2/bframe",
+    "recaptcha/enterprise/bframe",
 ]
 
 # Inside the reCAPTCHA iframe, the checkbox to click
 RECAPTCHA_CHECKBOX_SELECTORS = [
     "#recaptcha-anchor",
     ".recaptcha-checkbox",
-    'div[role="presentation"]',
     ".recaptcha-checkbox-border",
+    'span[role="checkbox"]',
 ]
 
 
