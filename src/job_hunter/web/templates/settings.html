@@ -126,13 +126,24 @@
           LinkedIn sent a verification code. Enter it below:
         </p>
         <div id="li-screenshot-wrap" style="display:none; margin-bottom: 0.6rem; text-align: center;">
-          <p style="font-size: 0.8rem; color: var(--pico-muted-color); margin: 0 0 0.3rem;">
+          <p id="li-screenshot-hint" style="font-size: 0.8rem; color: var(--pico-muted-color); margin: 0 0 0.3rem;">
             📸 This is what LinkedIn is showing on the server:
           </p>
-          <img id="li-screenshot" src="" alt="Checkpoint screenshot"
-               style="max-width: 100%; border: 1px solid var(--pico-muted-border-color); border-radius: 6px;">
+          <div style="position: relative; display: inline-block;">
+            <img id="li-screenshot" src="" alt="Checkpoint screenshot"
+                 style="max-width: 100%; border: 1px solid var(--pico-muted-border-color); border-radius: 6px;"
+                 onclick="onScreenshotClick(event)">
+          </div>
         </div>
-        <div style="display: flex; gap: 0.6rem; align-items: end; flex-wrap: wrap;">
+        <div id="li-remote-click-section" style="display:none; margin-bottom: 0.6rem;">
+          <button type="button" onclick="cancelRemoteClick()" class="outline secondary" id="li-cancel-click-btn" style="width: auto;">
+            🛑 Stop Remote Click
+          </button>
+          <small style="color: var(--pico-muted-color); margin-left: 0.5rem;">
+            Click anywhere on the screenshot above to interact with the page.
+          </small>
+        </div>
+        <div id="li-verify-code-section" style="display: flex; gap: 0.6rem; align-items: end; flex-wrap: wrap;">
           <label style="margin-bottom: 0; flex: 1; min-width: 180px;">
             Verification Code
             <input type="text" id="li-verify-code" placeholder="6-digit code"
@@ -325,12 +336,69 @@
 
   /* ── Remote LinkedIn Login ────────────────────── */
   var _loginSSE = null;
+  var _remoteClickMode = false;
 
   function _liLog(msg) {
     var log = document.getElementById('li-login-log');
     log.style.display = 'block';
     log.textContent += msg + '\n';
     log.scrollTop = log.scrollHeight;
+  }
+
+  function _setRemoteClickMode(on) {
+    _remoteClickMode = on;
+    var img = document.getElementById('li-screenshot');
+    var section = document.getElementById('li-remote-click-section');
+    var codeSection = document.getElementById('li-verify-code-section');
+    var hint = document.getElementById('li-screenshot-hint');
+    if (on) {
+      img.style.cursor = 'crosshair';
+      img.style.border = '3px solid #f0ad4e';
+      section.style.display = '';
+      codeSection.style.display = 'none';
+      hint.textContent = '🖱️ Click on the image below to interact with the page:';
+    } else {
+      img.style.cursor = '';
+      img.style.border = '1px solid var(--pico-muted-border-color)';
+      section.style.display = 'none';
+      codeSection.style.display = '';
+      hint.textContent = '📸 This is what LinkedIn is showing on the server:';
+    }
+  }
+
+  function onScreenshotClick(e) {
+    if (!_remoteClickMode) return;
+    var img = e.target;
+    // Scale from displayed image size to 1280×900 viewport
+    var scaleX = 1280 / img.clientWidth;
+    var scaleY = 900 / img.clientHeight;
+    var x = Math.round(e.offsetX * scaleX);
+    var y = Math.round(e.offsetY * scaleY);
+    _liLog('🖱️ Sending click at (' + x + ', ' + y + ')…');
+
+    fetch('/api/settings/linkedin-click', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({x: x, y: y}),
+    }).then(function(r) {
+      return r.json().then(function(data) {
+        if (!r.ok) {
+          _liLog('❌ ' + (data.error || 'Click failed'));
+        }
+      });
+    }).catch(function(err) {
+      _liLog('Error sending click: ' + err);
+    });
+  }
+
+  function cancelRemoteClick() {
+    fetch('/api/settings/linkedin-click', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cancel: true}),
+    }).then(function(r) { return r.json(); })
+     .then(function() { _liLog('Cancelling remote interaction…'); })
+     .catch(function(err) { _liLog('Error: ' + err); });
   }
 
   function startRemoteLogin() {
@@ -376,6 +444,17 @@
     _loginSSE.addEventListener('progress', function(e) {
       var d = e.data || '';
 
+      // Intercept remote-click mode markers
+      if (d === 'REMOTE_CLICK_START') {
+        _setRemoteClickMode(true);
+        document.getElementById('li-verify-section').style.display = '';
+        return;
+      }
+      if (d === 'REMOTE_CLICK_STOP') {
+        _setRemoteClickMode(false);
+        return;
+      }
+
       // Intercept screenshot markers — don't dump them to the text log
       if (d.indexOf('SCREENSHOT:') === 0) {
         var fname = d.substring('SCREENSHOT:'.length);
@@ -420,6 +499,7 @@
 
   function _onLoginDone() {
     _stopLoginSSE();
+    _setRemoteClickMode(false);
     document.getElementById('li-login-btn').disabled = false;
     document.getElementById('li-login-btn').textContent = '🔑 Log In to LinkedIn';
     document.getElementById('li-verify-section').style.display = 'none';
