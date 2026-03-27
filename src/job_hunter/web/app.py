@@ -83,7 +83,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
         # Global template variables
         from datetime import datetime as _dt_cls
+        from job_hunter import __version__ as _app_version
         app.state.templates.env.globals["current_year"] = _dt_cls.now().year
+        app.state.templates.env.globals["app_version"] = _app_version
 
         # Date formatting filter
         from datetime import datetime as _dt
@@ -190,7 +192,12 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             db_ok = True
         except Exception:
             pass
-        return {"status": "ok", "db_ok": db_ok, "scheduler_running": scheduler_ok}
+        return {
+            "status": "ok",
+            "version": _app_version,
+            "db_ok": db_ok,
+            "scheduler_running": scheduler_ok,
+        }
 
     app.include_router(auth_router.router)
     app.include_router(account_router.router)
