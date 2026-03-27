@@ -260,14 +260,34 @@ class LinkedInSession:
 
         # --- VERIFICATION / CHECKPOINT ---
         if self._is_checkpoint(url):
-            progress("LinkedIn is requesting verification…")
+            progress("LinkedIn is requesting a security check…")
 
-            # Try to detect the type of challenge from the page
+            # Dump page text for diagnostics
+            page_text = await self._get_visible_text(page)
+            progress(f"Page content: {page_text[:500]}")
+
+            # Step 1: Try to trigger code delivery — LinkedIn checkpoint
+            # pages often require clicking a "Send code" / "Submit" button
+            # BEFORE any code is actually sent to the user.
+            sent = await self._try_trigger_code_send(page, progress)
+
+            # Re-read URL — clicking may have navigated
+            url = page.url
+            if self._is_logged_in(url):
+                progress("Login successful after checkpoint! Saving cookies…")
+                await self._save_cookies_from_context(context)
+                progress(f"✅ Saved cookies to {self.cookies_path}")
+                return {"status": "success"}
+
+            # Step 2: Extract a human-readable hint from the (possibly updated) page
             hint = await self._get_checkpoint_hint(page)
-            progress(f"Verification required: {hint}")
+            if sent:
+                progress(f"Code requested — check your email / phone. ({hint})")
+            else:
+                progress(f"Verification required: {hint}")
 
+            # Step 3: Wait for the user to supply the code
             if get_verification_code is not None:
-                # Ask the caller for the code (may await an asyncio.Future)
                 progress("Waiting for verification code…")
                 code = get_verification_code()
                 if asyncio.isfuture(code) or asyncio.iscoroutine(code):
@@ -281,7 +301,9 @@ class LinkedInSession:
                 return {"status": "verification_needed", "hint": hint}
 
         # --- UNKNOWN STATE ---
+        page_text = await self._get_visible_text(page)
         progress(f"Unexpected post-login page: {url}")
+        progress(f"Page content: {page_text[:400]}")
         return {"status": "error", "detail": f"Unexpected page after login: {url}"}
 
     async def _submit_verification(
@@ -343,21 +365,119 @@ class LinkedInSession:
 
     @staticmethod
     def _is_checkpoint(url: str) -> bool:
-        return any(kw in url for kw in ("/checkpoint", "/challenge", "/authwall", "/uas/login-submit"))
+        return any(kw in url for kw in (
+            "/checkpoint", "/challenge", "/authwall",
+            "/uas/login-submit", "/uas/consumer-email-challenge",
+        ))
+
+    @staticmethod
+    async def _get_visible_text(page: Any) -> str:
+        """Return the visible text of the page body (for diagnostics)."""
+        try:
+            text = await page.locator("body").inner_text()
+            # Collapse whitespace
+            import re
+            return re.sub(r"\s+", " ", text).strip()
+        except Exception:
+            return "(could not read page text)"
+
+    @staticmethod
+    async def _try_trigger_code_send(page: Any, progress: Callable[[str], None]) -> bool:
+        """Click a 'Send code' / 'Submit' button on checkpoint pages.
+
+        LinkedIn checkpoint pages often show a form where the user must
+        *choose* a verification method and click a button before any code
+        is sent.  This method detects common patterns and clicks for the
+        user so the code is actually delivered.
+
+        Returns True if a trigger button was found and clicked.
+        """
+        # Pattern 1: explicit "Send code" / "Submit" buttons on challenge page
+        send_selectors = [
+            # Email / phone challenge "Submit" button
+            'button#email-pin-submit-button',
+            'form#email-pin-challenge button[type="submit"]',
+            'form#phone-pin-challenge button[type="submit"]',
+            # Generic challenge form submit
+            'form.challenge button[type="submit"]',
+            'form[action*="challenge"] button[type="submit"]',
+            # Newer checkpoint UI
+            'button[data-litms-control-urn*="checkpoint-challenge-submit"]',
+            # "Verify" / "Send" / "Submit" by text
+            'button:has-text("Send")',
+            'button:has-text("Verify")',
+            'button:has-text("Submit")',
+        ]
+        for sel in send_selectors:
+            try:
+                btn = page.locator(sel)
+                if await btn.count() > 0 and await btn.first.is_visible():
+                    label = (await btn.first.text_content() or "").strip()
+                    progress(f"Clicking '{label or 'Submit'}' to trigger code delivery…")
+                    await btn.first.click()
+                    await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+                    await page.wait_for_timeout(2000)
+                    return True
+            except Exception:
+                continue
+
+        # Pattern 2: radio-button method selector (email vs phone vs app)
+        # If present, select the first option and submit the enclosing form.
+        radios = page.locator(
+            'input[type="radio"][name="challengeType"], '
+            'input[type="radio"][name="verificationMethod"]'
+        )
+        try:
+            if await radios.count() > 0:
+                await radios.first.check()
+                progress("Selected first verification method and submitting…")
+                form_submit = page.locator(
+                    'form button[type="submit"], form input[type="submit"]'
+                )
+                if await form_submit.count() > 0:
+                    await form_submit.first.click()
+                    await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+                    await page.wait_for_timeout(2000)
+                    return True
+        except Exception:
+            pass
+
+        progress("No 'Send code' button found — LinkedIn may be waiting for manual action.")
+        return False
 
     @staticmethod
     async def _get_checkpoint_hint(page: Any) -> str:
         """Extract a human-readable hint about what LinkedIn is asking."""
-        try:
-            # Look for a description paragraph
-            desc = page.locator("p.challenge-description, p.rt-checkpoint__message, h1, p.content__primary")
-            if await desc.count() > 0:
-                txt = (await desc.first.text_content() or "").strip()
-                if txt:
-                    return txt[:300]
-        except Exception:
-            pass
-        return "LinkedIn sent a verification code to your email or phone. Enter it below."
+        # Try several selectors for description text, broadest last
+        selectors = [
+            "h1",
+            "p.challenge-description",
+            "p.rt-checkpoint__message",
+            "p.content__primary",
+            "div.body__content p",
+            "main p",
+        ]
+        parts: list[str] = []
+        for sel in selectors:
+            try:
+                els = page.locator(sel)
+                count = await els.count()
+                for i in range(min(count, 3)):
+                    txt = (await els.nth(i).text_content() or "").strip()
+                    if txt and txt not in parts and len(txt) > 5:
+                        parts.append(txt)
+            except Exception:
+                continue
+            if parts:
+                break
+
+        if parts:
+            return " | ".join(parts)[:500]
+
+        return (
+            "LinkedIn requires verification but the page content could not be read. "
+            "Check the log above for the raw page text."
+        )
 
     async def create_context(
         self,
