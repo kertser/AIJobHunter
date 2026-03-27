@@ -37,11 +37,18 @@ docker build -t "$IMAGE_NAME" .
 
 # ── Run container ──
 echo "→ Starting container: ${CONTAINER_NAME}…"
+ENV_FLAG=""
+if [ -f "$ENV_FILE" ]; then
+    ENV_FLAG="--env-file ${ENV_FILE}"
+else
+    echo "  (no .env file found — skipping --env-file)"
+fi
+
 docker run -d \
     --name "$CONTAINER_NAME" \
     -p "${HOST_PORT}:${CONTAINER_PORT}" \
     -v "${DATA_DIR}:/app/data" \
-    --env-file "$ENV_FILE" \
+    $ENV_FLAG \
     --restart unless-stopped \
     "$IMAGE_NAME"
 
