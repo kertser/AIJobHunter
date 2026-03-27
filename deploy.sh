@@ -33,7 +33,7 @@ git pull
 
 # ── Build image ──
 echo "→ Building Docker image: ${IMAGE_NAME}…"
-docker build -t "$IMAGE_NAME" .
+DOCKER_BUILDKIT=1 docker build -t "$IMAGE_NAME" .
 
 # ── Run container ──
 echo "→ Starting container: ${CONTAINER_NAME}…"
