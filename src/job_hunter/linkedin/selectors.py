@@ -263,4 +263,22 @@ CHALLENGE_MARKERS = [
     "div#recaptcha-dialog",
 ]
 
+# reCAPTCHA iframe selectors — the "I'm not a robot" checkbox lives inside
+# an iframe served from Google's domain.
+RECAPTCHA_IFRAME_SELECTORS = [
+    'iframe[src*="recaptcha/api2/anchor"]',
+    'iframe[src*="recaptcha/enterprise/anchor"]',
+    'iframe[src*="google.com/recaptcha"]',
+    'iframe[title="reCAPTCHA"]',
+    'iframe[title*="recaptcha"]',
+]
+
+# Inside the reCAPTCHA iframe, the checkbox to click
+RECAPTCHA_CHECKBOX_SELECTORS = [
+    "#recaptcha-anchor",
+    ".recaptcha-checkbox",
+    'div[role="presentation"]',
+    ".recaptcha-checkbox-border",
+]
+
 
