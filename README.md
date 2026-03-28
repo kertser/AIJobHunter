@@ -93,6 +93,8 @@ cd AIJobHunter
 uv sync          # installs all dependencies including dev tools
 ```
 
+> **Windows note:** All `uv` and `pytest` commands work the same in PowerShell. For `.env` creation, use `Copy-Item .env.example .env` instead of `cp`.
+
 Verify the installation:
 
 ```bash
@@ -113,7 +115,8 @@ This is the recommended sequence to go from zero to a fully operational system.
 uv sync
 
 # Create your .env file
-cp .env.example .env
+cp .env.example .env          # Linux/macOS
+# Copy-Item .env.example .env  # Windows PowerShell
 ```
 
 Edit `.env` and set your OpenAI API key:
@@ -873,6 +876,23 @@ Tests use fake implementations for all external services:
 
 All database tests use in-memory SQLite. Mock discovery tests spin up a local HTTP server with HTML fixtures.
 
+### Windows Development Notes
+
+Primary development is on **Windows (PowerShell)**. Common equivalents:
+
+| Unix | PowerShell |
+|---|---|
+| `cat file` | `Get-Content file` |
+| `head -n 20 file` | `Get-Content file -Head 20` |
+| `tail -n 20 file` | `Get-Content file -Tail 20` |
+| `tail -f file` | `Get-Content file -Wait -Tail 20` |
+| `grep pattern file` | `Select-String -Pattern "pattern" file` |
+| `find . -name "*.py"` | `Get-ChildItem -Recurse -Filter *.py` |
+| `export VAR=val` | `$env:VAR = "val"` |
+| `cp src dst` | `Copy-Item src dst` |
+
+All `uv`, `pytest`, and `docker compose` commands work identically on Windows. Only `deploy.sh` requires WSL or Docker Desktop.
+
 ---
 
 ## Docker Deployment
@@ -886,13 +906,15 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
+> **Windows:** `deploy.sh` is Linux/macOS only. On Windows, use **Docker Desktop** with `docker compose` commands below, or run the script in **WSL**.
+
 This stops any running containers, prunes stale Docker resources, pulls the latest code,
 rebuilds the image, and starts the container on **port 80** with the `data/` volume and `.env` config.
 
 ### Docker Compose
 
 ```bash
-# Build and start
+# Build and start (works on all platforms including Windows)
 docker compose up -d
 
 # View logs

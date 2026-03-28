@@ -54,6 +54,11 @@ class AppSettings(BaseSettings):
     registration_enabled: bool = True  # allow self-registration
     admin_password: str = ""      # separate password to access admin panel
 
+    # LinkedIn OAuth (BFF — tokens stored server-side, never exposed to frontend)
+    linkedin_client_id: str = ""
+    linkedin_client_secret: str = ""
+    linkedin_redirect_uri: str = ""  # e.g. http://localhost:8000/auth/linkedin/callback
+
 
 class SearchProfile(BaseModel):
     """A single job-search profile loaded from YAML."""

@@ -1566,6 +1566,92 @@ def test_cookies_paste_whitespace_trimmed(client):
     assert cookies[0]["value"] == li_at_value.strip()
 
 
+def test_cookies_extract_saves_on_success_firefox(client, monkeypatch):
+    """POST /api/settings/cookies-extract saves cookie when Firefox has it."""
+    import job_hunter.web.routers.settings as settings_mod
+
+    fake_value = "AQEDAQNhFakeExtractedCookieValue" + "x" * 40
+    monkeypatch.setattr(
+        settings_mod, "_try_extract_firefox", lambda: (fake_value, "Firefox"),
+    )
+
+    r = client.post("/api/settings/cookies-extract")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["saved"] is True
+    assert data["browser"] == "Firefox"
+
+    # Verify the cookie file was written correctly
+    import json as _json
+    settings = client.app.state.settings
+    path = settings.data_dir / "cookies.json"
+    cookies = _json.loads(path.read_text())
+    assert len(cookies) == 1
+    assert cookies[0]["name"] == "li_at"
+    assert cookies[0]["value"] == fake_value
+    assert cookies[0]["domain"] == ".linkedin.com"
+
+
+def test_cookies_extract_falls_back_to_cdp(client, monkeypatch):
+    """POST /api/settings/cookies-extract tries CDP when Firefox fails."""
+    import job_hunter.web.routers.settings as settings_mod
+
+    fake_value = "AQEDAQNhCdpExtractedCookieValue" + "x" * 40
+
+    # Firefox fails
+    monkeypatch.setattr(
+        settings_mod, "_try_extract_firefox", lambda: (None, "Firefox: not installed"),
+    )
+    # CDP succeeds
+    async def _fake_cdp():
+        return fake_value, "Chrome"
+    monkeypatch.setattr(settings_mod, "_try_extract_via_cdp", _fake_cdp)
+
+    r = client.post("/api/settings/cookies-extract")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["saved"] is True
+    assert data["browser"] == "Chrome"
+
+
+def test_cookies_extract_returns_404_when_not_found(client, monkeypatch):
+    """POST /api/settings/cookies-extract returns 404 when all strategies fail."""
+    import job_hunter.web.routers.settings as settings_mod
+
+    monkeypatch.setattr(
+        settings_mod, "_try_extract_firefox", lambda: (None, "Firefox: not found"),
+    )
+
+    async def _fake_cdp():
+        return None, "Chrome: no li_at cookie found (not logged in?)"
+    monkeypatch.setattr(settings_mod, "_try_extract_via_cdp", _fake_cdp)
+
+    r = client.post("/api/settings/cookies-extract")
+    assert r.status_code == 404
+    error = r.json()["error"]
+    assert "Firefox" in error
+    assert "Chrome" in error
+
+
+
+def test_extension_zip_download(client):
+    """GET /api/settings/extension-zip returns a valid ZIP file."""
+    r = client.get("/api/settings/extension-zip")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    assert "attachment" in r.headers.get("content-disposition", "")
+
+    # Verify it's actually a valid ZIP with expected files
+    import io
+    import zipfile
+    buf = io.BytesIO(r.content)
+    with zipfile.ZipFile(buf) as zf:
+        names = zf.namelist()
+        assert any("manifest.json" in n for n in names)
+        assert any("popup.html" in n for n in names)
+        assert any("popup.js" in n for n in names)
+
+
 # ---------------------------------------------------------------------------
 # LinkedIn Remote Login endpoints
 # ---------------------------------------------------------------------------

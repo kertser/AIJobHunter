@@ -88,6 +88,9 @@ _PERSISTED_FIELDS: dict[str, str] = {
     "secret_key": "JOBHUNTER_SECRET_KEY",
     "registration_enabled": "JOBHUNTER_REGISTRATION_ENABLED",
     "admin_password": "JOBHUNTER_ADMIN_PASSWORD",
+    "linkedin_client_id": "JOBHUNTER_LINKEDIN_CLIENT_ID",
+    "linkedin_client_secret": "JOBHUNTER_LINKEDIN_CLIENT_SECRET",
+    "linkedin_redirect_uri": "JOBHUNTER_LINKEDIN_REDIRECT_URI",
 }
 
 

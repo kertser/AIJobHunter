@@ -56,87 +56,160 @@
     <small>Cannot be changed at runtime.</small>
   </label>
 
-  <hr style="margin: 1.5rem 0;">
+  <hr style="margin: 2rem 0;">
 
-  <!-- ═══ LinkedIn Cookies ═══ -->
-  <h3>🔗 LinkedIn Session</h3>
-  <p style="color: var(--pico-muted-color); font-size: 0.85rem; margin-top: 0;">
-    LinkedIn requires an authenticated session for job discovery and applications.
-    The easiest way is to copy the <code>li_at</code> cookie from your browser.
+  <!-- ═══════════════════════════════════════════════════════════════
+       LINKEDIN INTEGRATION — unified section
+       ═══════════════════════════════════════════════════════════════ -->
+  <h3 style="margin-bottom: 0.3rem;">
+    <span style="background: #0a66c2; color: #fff; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.85em; vertical-align: middle;">in</span>
+    LinkedIn Integration
+  </h3>
+  <p style="color: var(--pico-muted-color); font-size: 0.84rem; margin-top: 0.2rem; margin-bottom: 1.2rem;">
+    Two independent connections — <strong>OAuth</strong> for profile import, <strong>Session</strong> for job discovery &amp; applications.
   </p>
 
-  <div id="cookies-status" style="margin-bottom: 0.8rem; font-size: 0.9rem;">
-    <span id="cookies-indicator">Checking…</span>
-  </div>
-
-  <!-- ── Primary: Paste li_at cookie ── -->
-  <div style="margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px;">
-    <p style="font-weight: 600; margin: 0 0 0.5rem; font-size: 0.95rem;">🍪 Paste your <code>li_at</code> cookie</p>
-    <div style="font-size: 0.84rem; line-height: 1.6; margin-bottom: 0.8rem; color: var(--pico-muted-color);">
-      <strong>How to get it:</strong>
-      <ol style="margin: 0.3rem 0 0 1.2rem; padding: 0;">
-        <li>Log in to <a href="https://www.linkedin.com" target="_blank" rel="noopener">linkedin.com</a> in your browser</li>
-        <li>Open DevTools (<kbd>F12</kbd> or <kbd>Ctrl+Shift+I</kbd>)</li>
-        <li>Go to <strong>Application</strong> → <strong>Cookies</strong> → <code>https://www.linkedin.com</code></li>
-        <li>Find the <code>li_at</code> cookie and copy its <strong>Value</strong></li>
-      </ol>
+  <!-- ────────────────────────────────────────────────────────────
+       1 · LinkedIn Account (OAuth)
+       ──────────────────────────────────────────────────────────── -->
+  <div style="margin-bottom: 1.2rem; padding: 1rem 1.2rem; border-left: 4px solid #0a66c2; border-radius: 8px; background: var(--pico-card-background-color); box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
+    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem;">
+      <span style="font-size: 1.15rem;">👤</span>
+      <strong style="font-size: 0.95rem;">Account · OAuth</strong>
+      <span style="font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: 10px; background: var(--pico-muted-border-color); color: var(--pico-muted-color); margin-left: 0.3rem;">optional</span>
     </div>
-    <div style="display: flex; gap: 0.8rem; align-items: end; flex-wrap: wrap;">
-      <label style="margin-bottom: 0; flex: 1; min-width: 240px;">
-        <code>li_at</code> cookie value
-        <input type="text" id="li-at-value" placeholder="AQEDAQNh…" autocomplete="off"
-               style="font-family: monospace; font-size: 0.85rem;">
-      </label>
-      <button type="button" onclick="saveLiAtCookie()" class="secondary" id="save-liat-btn" style="width: auto;">
-        🔑 Save Cookie
-      </button>
-    </div>
-  </div>
+    <p style="color: var(--pico-muted-color); font-size: 0.82rem; margin: 0 0 0.7rem; line-height: 1.5;">
+      Connect your LinkedIn account for profile import and identity verification.
+      Not required for job discovery.
+    </p>
 
-  <div style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.6rem;">
-    <button type="button" onclick="deleteCookies()" class="outline secondary" id="delete-cookies-btn" style="width: auto;">🗑️ Delete Session</button>
-  </div>
-
-  <!-- ── Alternative: Upload cookie file ── -->
-  <details style="margin-bottom: 1rem; font-size: 0.84rem;">
-    <summary style="cursor: pointer; font-weight: 600; color: var(--pico-primary);">📁 Alternative: Upload full cookies JSON file</summary>
-    <div style="margin-top: 0.5rem; padding: 0.8rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px; line-height: 1.6;">
-      <p>Use a browser extension like <em>Cookie-Editor</em> to export all LinkedIn cookies as JSON and upload the file here.</p>
-      <div style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; margin-top: 0.5rem;">
-        <label style="margin-bottom: 0;">
-          <input type="file" id="cookies-file" accept=".json" style="max-width: 300px;">
-        </label>
-        <button type="button" onclick="uploadCookies()" class="secondary" id="upload-cookies-btn" style="width: auto;">📤 Upload Cookies</button>
+    <div id="linkedin-oauth-section">
+      <div id="linkedin-oauth-status" style="font-size: 0.9rem; padding: 0.4rem 0.6rem; border-radius: 6px; background: rgba(0,0,0,0.03);">Checking…</div>
+      <div id="linkedin-oauth-actions" style="margin-top: 0.7rem; display: none;">
+        <a href="/auth/linkedin" id="linkedin-connect-btn" class="secondary" role="button" style="width: auto; display: none;">
+          🔗 Connect with LinkedIn
+        </a>
+        <button type="button" onclick="disconnectLinkedIn()" id="linkedin-disconnect-btn" class="outline secondary" style="width: auto; display: none;">
+          🔓 Disconnect LinkedIn
+        </button>
+      </div>
+      <div id="linkedin-oauth-not-configured" style="display: none; font-size: 0.82rem; color: var(--pico-muted-color); margin-top: 0.5rem;">
+        <p style="margin: 0;">OAuth not configured. Set <code>JOBHUNTER_LINKEDIN_CLIENT_ID</code>,
+        <code>JOBHUNTER_LINKEDIN_CLIENT_SECRET</code>, and <code>JOBHUNTER_LINKEDIN_REDIRECT_URI</code> in <code>.env</code>.</p>
       </div>
     </div>
-  </details>
+  </div>
 
-  <!-- ═══ Remote Login ═══ -->
-  <details style="margin-bottom: 1rem;">
-    <summary style="cursor: pointer; font-weight: 600; color: var(--pico-primary);">🖥️ Last resort: Remote Login (log in from the server — may trigger CAPTCHA)</summary>
-    <div style="margin-top: 0.5rem; padding: 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px;">
-      <p style="color: var(--pico-muted-color); font-size: 0.84rem; margin-top: 0;">
-        Log in to LinkedIn using a headless browser on the server.
-        Use this when you can't export cookies from a local browser (e.g. Docker deployment).
+  <!-- ────────────────────────────────────────────────────────────
+       2 · LinkedIn Session (Cookies)
+       ──────────────────────────────────────────────────────────── -->
+  <div style="padding: 1rem 1.2rem; border-left: 4px solid #2e8b57; border-radius: 8px; background: var(--pico-card-background-color); box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 1rem;">
+    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem;">
+      <span style="font-size: 1.15rem;">🔑</span>
+      <strong style="font-size: 0.95rem;">Session · Browser Cookies</strong>
+      <span style="font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: 10px; background: #2e8b57; color: #fff; margin-left: 0.3rem;">required</span>
+    </div>
+    <p style="color: var(--pico-muted-color); font-size: 0.82rem; margin: 0 0 0.6rem; line-height: 1.5;">
+      An authenticated browser session (<code>li_at</code> cookie) is required for job discovery and applications.
+    </p>
+
+    <div id="cookies-status" style="margin-bottom: 0.8rem; font-size: 0.9rem; padding: 0.4rem 0.6rem; border-radius: 6px; background: rgba(0,0,0,0.03);">
+      <span id="cookies-indicator">Checking…</span>
+    </div>
+
+    <!-- ── Primary: Auto-extract ── -->
+    <div style="margin-bottom: 0.8rem; padding: 0.8rem 1rem; border: 2px solid var(--pico-primary); border-radius: 8px; background: rgba(10,102,194,0.04);">
+      <div style="display: flex; align-items: baseline; gap: 0.4rem; margin-bottom: 0.4rem;">
+        <span style="background: var(--pico-primary); color: #fff; font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 4px;">1</span>
+        <span style="font-weight: 600; font-size: 0.93rem;">🔍 Auto-Extract from Browser</span>
+        <small style="color: var(--pico-muted-color);">— recommended, one click</small>
+      </div>
+      <p style="font-size: 0.82rem; line-height: 1.55; margin: 0 0 0.6rem; color: var(--pico-muted-color);">
+        Reads <code>li_at</code> from Chrome / Edge while the browser is open.
+        Log in to LinkedIn first, then click below.
       </p>
-      <details style="margin-bottom: 0.8rem; font-size: 0.82rem;">
-        <summary style="cursor: pointer; color: var(--pico-muted-color);">⚠️ What to expect</summary>
-        <div style="padding: 0.6rem; border: 1px solid var(--pico-muted-border-color); border-radius: 6px; margin-top: 0.4rem; line-height: 1.5;">
-          <p style="margin:0 0 0.4rem"><strong>LinkedIn may ask for a verification code</strong> sent to your email or phone.
-            The system will automatically click "Send code" if possible. Watch the log below for status.</p>
-          <p style="margin:0 0 0.4rem">If you <strong>don't receive a code</strong>, LinkedIn may be blocking automated login from this IP.
-            In that case, use the <em>cookie upload</em> method above instead.</p>
-          <p style="margin:0">If LinkedIn shows a CAPTCHA or "approve from app" prompt, programmatic login won't work — use cookie upload.</p>
-        </div>
-      </details>
+      <div style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap;">
+        <button type="button" onclick="autoExtractCookie()" class="secondary" id="auto-extract-btn" style="width: auto;">
+          🔍 Extract from Browser
+        </button>
+        <span id="auto-extract-status" style="font-size: 0.84rem;"></span>
+      </div>
+    </div>
 
-      <div class="grid" style="margin-bottom: 0.5rem;">
-        <label>
-          LinkedIn Email
-          <input type="email" id="li-email" placeholder="you@example.com" autocomplete="username">
-        </label>
-        <label>
-          LinkedIn Password
+    <!-- ── Manual: Paste li_at cookie ── -->
+    <details style="margin-bottom: 0.8rem;">
+      <summary style="cursor: pointer; font-size: 0.93rem;">
+        <span style="background: var(--pico-muted-border-color); color: var(--pico-color); font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 4px;">2</span>
+        <span style="font-weight: 600; color: var(--pico-primary); margin-left: 0.3rem;">🍪 Paste <code>li_at</code> from DevTools</span>
+      </summary>
+      <div style="margin-top: 0.5rem; padding: 0.8rem 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px;">
+        <div style="font-size: 0.82rem; line-height: 1.6; margin-bottom: 0.7rem; color: var(--pico-muted-color);">
+          <strong>How to get it:</strong>
+          <ol style="margin: 0.3rem 0 0 1.2rem; padding: 0;">
+            <li>Log in to <a href="https://www.linkedin.com" target="_blank" rel="noopener">linkedin.com</a></li>
+            <li>Open DevTools (<kbd>F12</kbd>)</li>
+            <li><strong>Application</strong> → <strong>Cookies</strong> → <code>https://www.linkedin.com</code></li>
+            <li>Copy the <code>li_at</code> cookie <strong>Value</strong></li>
+          </ol>
+        </div>
+        <div style="display: flex; gap: 0.8rem; align-items: end; flex-wrap: wrap;">
+          <label style="margin-bottom: 0; flex: 1; min-width: 240px;">
+            <code>li_at</code> cookie value
+            <input type="text" id="li-at-value" placeholder="AQEDAQNh…" autocomplete="off"
+                   style="font-family: monospace; font-size: 0.85rem;">
+          </label>
+          <button type="button" onclick="saveLiAtCookie()" class="secondary" id="save-liat-btn" style="width: auto;">
+            🔑 Save Cookie
+          </button>
+        </div>
+      </div>
+    </details>
+
+    <!-- ── Upload cookie file ── -->
+    <details style="margin-bottom: 0.8rem; font-size: 0.84rem;">
+      <summary style="cursor: pointer; font-size: 0.93rem;">
+        <span style="background: var(--pico-muted-border-color); color: var(--pico-color); font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 4px;">3</span>
+        <span style="font-weight: 600; color: var(--pico-primary); margin-left: 0.3rem;">📁 Upload cookies JSON file</span>
+      </summary>
+      <div style="margin-top: 0.5rem; padding: 0.8rem 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px; line-height: 1.6;">
+        <p style="margin: 0 0 0.5rem;">Export all LinkedIn cookies as JSON via a browser extension (e.g. <em>Cookie-Editor</em>) and upload here.</p>
+        <div style="display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap;">
+          <label style="margin-bottom: 0;">
+            <input type="file" id="cookies-file" accept=".json" style="max-width: 300px;">
+          </label>
+          <button type="button" onclick="uploadCookies()" class="secondary" id="upload-cookies-btn" style="width: auto;">📤 Upload</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- ── Remote Login ── -->
+    <details style="margin-bottom: 0.8rem;">
+      <summary style="cursor: pointer; font-size: 0.93rem;">
+        <span style="background: var(--pico-muted-border-color); color: var(--pico-color); font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 4px;">4</span>
+        <span style="font-weight: 600; color: var(--pico-primary); margin-left: 0.3rem;">🖥️ Remote Login <small style="font-weight: 400; color: var(--pico-muted-color);">— last resort, may trigger CAPTCHA</small></span>
+      </summary>
+      <div style="margin-top: 0.5rem; padding: 0.8rem 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px;">
+        <p style="color: var(--pico-muted-color); font-size: 0.82rem; margin-top: 0;">
+          Log in via a headless browser on the server. Use when you can't export cookies locally (e.g. Docker).
+        </p>
+        <details style="margin-bottom: 0.8rem; font-size: 0.82rem;">
+          <summary style="cursor: pointer; color: var(--pico-muted-color);">⚠️ What to expect</summary>
+          <div style="padding: 0.6rem; border: 1px solid var(--pico-muted-border-color); border-radius: 6px; margin-top: 0.4rem; line-height: 1.5;">
+            <p style="margin:0 0 0.4rem"><strong>LinkedIn may ask for a verification code</strong> sent to your email or phone.
+              The system will automatically click "Send code" if possible. Watch the log below for status.</p>
+            <p style="margin:0 0 0.4rem">If you <strong>don't receive a code</strong>, LinkedIn may be blocking automated login from this IP.
+              In that case, use the <em>cookie upload</em> method above instead.</p>
+            <p style="margin:0">If LinkedIn shows a CAPTCHA or "approve from app" prompt, programmatic login won't work — use cookie upload.</p>
+          </div>
+        </details>
+
+        <div class="grid" style="margin-bottom: 0.5rem;">
+          <label>
+            LinkedIn Email
+            <input type="email" id="li-email" placeholder="you@example.com" autocomplete="username">
+          </label>
+          <label>
+            LinkedIn Password
           <input type="password" id="li-password" placeholder="••••••••" autocomplete="current-password">
         </label>
       </div>
@@ -190,7 +263,14 @@
     </div>
   </details>
 
-  <hr style="margin: 1.5rem 0;">
+    <!-- Delete session — inside the Session card -->
+    <div style="margin-top: 0.5rem; padding-top: 0.6rem; border-top: 1px solid var(--pico-muted-border-color);">
+      <button type="button" onclick="deleteCookies()" class="outline secondary" id="delete-cookies-btn" style="width: auto; font-size: 0.84rem;">🗑️ Delete Session</button>
+    </div>
+
+  </div><!-- /Session card -->
+
+  <hr style="margin: 2rem 0;">
 
   <!-- ═══ Email Notifications ═══ -->
   <h3>📧 Email Notifications</h3>
@@ -294,6 +374,67 @@
 
 {% block extra_scripts %}
 <script>
+  /* ── LinkedIn OAuth (BFF) ─────────────────────── */
+  function refreshLinkedInOAuthStatus() {
+    fetch('/api/settings/linkedin-status')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var statusEl = document.getElementById('linkedin-oauth-status');
+        var actionsEl = document.getElementById('linkedin-oauth-actions');
+        var connectBtn = document.getElementById('linkedin-connect-btn');
+        var disconnectBtn = document.getElementById('linkedin-disconnect-btn');
+        var notConfigured = document.getElementById('linkedin-oauth-not-configured');
+
+        actionsEl.style.display = '';
+
+        if (!data.oauth_configured) {
+          statusEl.innerHTML = '⚙️ OAuth not configured';
+          connectBtn.style.display = 'none';
+          disconnectBtn.style.display = 'none';
+          notConfigured.style.display = '';
+          return;
+        }
+
+        notConfigured.style.display = 'none';
+
+        if (data.connected) {
+          statusEl.innerHTML = '✅ Connected' + (data.display_name ? ' as <strong>' + data.display_name + '</strong>' : '') +
+            (data.member_id ? ' <small style="color:var(--pico-muted-color)">(ID: ' + data.member_id + ')</small>' : '');
+          connectBtn.style.display = 'none';
+          disconnectBtn.style.display = '';
+        } else if (data.expired) {
+          statusEl.innerHTML = '⚠️ Token expired — reconnect to refresh';
+          connectBtn.style.display = '';
+          disconnectBtn.style.display = '';
+        } else {
+          statusEl.innerHTML = '❌ Not connected';
+          connectBtn.style.display = '';
+          disconnectBtn.style.display = 'none';
+        }
+      })
+      .catch(function() {
+        document.getElementById('linkedin-oauth-status').textContent = '⚠️ Could not check status';
+      });
+  }
+
+  function disconnectLinkedIn() {
+    if (!confirm('Disconnect your LinkedIn account? You can reconnect at any time.')) return;
+    fetch('/api/settings/linkedin-disconnect', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.disconnected) {
+          showToast('LinkedIn account disconnected');
+        } else {
+          showToast('❌ ' + (data.error || 'Failed to disconnect'));
+        }
+      })
+      .catch(function(err) { showToast('Error: ' + err); })
+      .finally(function() { refreshLinkedInOAuthStatus(); });
+  }
+
+  // Check LinkedIn OAuth status on page load
+  refreshLinkedInOAuthStatus();
+
   /* ── LinkedIn Cookies ─────────────────────────── */
   function refreshCookiesStatus() {
     fetch('/api/settings/cookies-status')
@@ -308,6 +449,35 @@
       })
       .catch(function() {
         document.getElementById('cookies-indicator').textContent = '⚠️ Could not check status';
+      });
+  }
+
+  function autoExtractCookie() {
+    var btn = document.getElementById('auto-extract-btn');
+    var status = document.getElementById('auto-extract-status');
+    btn.disabled = true;
+    btn.textContent = '⏳ Scanning browsers…';
+    status.textContent = '';
+
+    fetch('/api/settings/cookies-extract', { method: 'POST' })
+      .then(function(r) {
+        return r.json().then(function(data) {
+          if (r.ok) {
+            showToast('✅ Cookie extracted from ' + data.browser + '!');
+            status.innerHTML = '✅ Extracted from <strong>' + data.browser + '</strong>';
+          } else {
+            var err = data.error || 'Extraction failed';
+            status.innerHTML = '❌ ' + err + '<br><small style="color:var(--pico-muted-color)">Try the Chrome extension or manual paste below.</small>';
+          }
+        });
+      })
+      .catch(function(err) {
+        status.textContent = '❌ Error: ' + err;
+      })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = '🔍 Extract from Browser';
+        refreshCookiesStatus();
       });
   }
 

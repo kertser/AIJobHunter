@@ -273,6 +273,330 @@ async def paste_li_at_cookie(body: LiAtPasteRequest, request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Auto-extract li_at from installed browsers
+# ---------------------------------------------------------------------------
+
+
+def _save_li_at_to_file(request: Request, value: str) -> None:
+    """Persist a ``li_at`` value as a Playwright-format cookies.json."""
+    cookies = [
+        {
+            "name": "li_at",
+            "value": value,
+            "domain": ".linkedin.com",
+            "path": "/",
+            "httpOnly": True,
+            "secure": True,
+            "sameSite": "None",
+        },
+    ]
+    path = _cookies_path(request)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cookies, indent=2), encoding="utf-8")
+
+
+# ── Strategy 1: browser_cookie3 (Firefox — Chrome/Edge fail on v127+)
+
+
+def _try_extract_firefox() -> tuple[str | None, str | None]:
+    """Try reading ``li_at`` from Firefox via ``browser_cookie3``.
+
+    Returns ``(value, "Firefox")`` on success, ``(None, error_msg)`` on failure.
+    """
+    try:
+        import browser_cookie3
+    except ImportError:
+        return None, "Firefox: browser_cookie3 not installed"
+
+    try:
+        cj = browser_cookie3.firefox(domain_name=".linkedin.com")
+        for cookie in cj:
+            if cookie.name == "li_at" and cookie.value:
+                return cookie.value, "Firefox"
+        return None, "Firefox: no li_at cookie (not logged in?)"
+    except Exception as exc:
+        return None, f"Firefox: {exc}"
+
+
+# ── Strategy 2: Copy Chrome/Edge cookie DB to a temp dir, then launch the
+#    real browser binary headless to decrypt via CDP.
+#
+#    Key insight: Chrome's own binary can always decrypt its app-bound cookies.
+#    By copying the Cookies DB + Local State to a temp profile we avoid any
+#    file-lock conflict with the running browser instance.
+
+
+import os
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+
+def _find_chromium_browsers() -> list[tuple[str, Path, Path]]:
+    """Find Chrome/Edge installations on Windows.
+
+    Returns ``[(display_name, binary_path, user_data_dir), ...]``.
+    """
+    if sys.platform != "win32":
+        return []
+
+    local = os.environ.get("LOCALAPPDATA", "")
+    pf = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+    pf86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
+
+    candidates = [
+        (
+            "Chrome",
+            [
+                Path(pf) / "Google" / "Chrome" / "Application" / "chrome.exe",
+                Path(pf86) / "Google" / "Chrome" / "Application" / "chrome.exe",
+            ],
+            Path(local) / "Google" / "Chrome" / "User Data",
+        ),
+        (
+            "Edge",
+            [
+                Path(pf) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+                Path(pf86) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            ],
+            Path(local) / "Microsoft" / "Edge" / "User Data",
+        ),
+    ]
+
+    results: list[tuple[str, Path, Path]] = []
+    for name, binaries, user_data in candidates:
+        for b in binaries:
+            if b.exists() and user_data.exists():
+                results.append((name, b, user_data))
+                break
+    return results
+
+
+def _copy_cookie_profile(user_data_dir: Path, tmp_dir: Path) -> None:
+    """Copy the minimum files Chrome needs to load cookies into *tmp_dir*.
+
+    Copies:
+    * ``Local State``  — contains the (encrypted) cookie-decryption key.
+    * ``Default/Network/Cookies`` — the SQLite cookie database.
+
+    Uses **SQLite's backup API** with ``immutable=1`` to read the Cookies
+    database even while Chrome holds an exclusive lock on it.
+    """
+    import sqlite3
+
+    # 1. Encryption key (regular JSON file — read raw bytes to bypass locks)
+    ls = user_data_dir / "Local State"
+    if ls.exists():
+        try:
+            data = ls.read_bytes()
+            (tmp_dir / "Local State").write_bytes(data)
+        except OSError:
+            pass  # non-fatal: Chrome may still decrypt without it
+
+    # 2. Cookie database — use SQLite backup to bypass Chrome's file lock.
+    #    The ``immutable=1`` URI flag tells SQLite to skip all file locking,
+    #    which lets us read the DB even though Chrome has it exclusively open.
+    for rel in (
+        Path("Default") / "Network" / "Cookies",
+        Path("Default") / "Cookies",
+    ):
+        src = user_data_dir / rel
+        if src.exists():
+            dst_dir = tmp_dir / rel.parent
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            dst = dst_dir / src.name
+
+            src_uri = "file:///" + src.resolve().as_posix() + "?immutable=1"
+            src_conn = sqlite3.connect(src_uri, uri=True)
+            dst_conn = sqlite3.connect(str(dst))
+            try:
+                src_conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
+                src_conn.close()
+            return
+
+    raise FileNotFoundError("Cookies database not found in profile")
+
+
+async def _cdp_extract_cookie(binary: Path, user_data_dir: Path) -> str | None:
+    """Copy the cookie DB to a temp profile, launch the browser headless,
+    and read ``li_at`` via CDP.
+
+    The browser's own binary decrypts the app-bound-encrypted cookies
+    transparently — no third-party decryption library needed.
+    """
+    import asyncio as _aio
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="aijh_cookie_"))
+    try:
+        _copy_cookie_profile(user_data_dir, tmp_dir)
+
+        proc = await _aio.create_subprocess_exec(
+            str(binary),
+            f"--user-data-dir={tmp_dir}",
+            "--remote-debugging-port=0",
+            "--headless=new",
+            "--no-first-run",
+            "--disable-gpu",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-sync",
+            stdout=_aio.subprocess.DEVNULL,
+            stderr=_aio.subprocess.DEVNULL,
+        )
+
+        try:
+            # Wait for DevToolsActivePort (contains the debug port number)
+            port_file = tmp_dir / "DevToolsActivePort"
+            port: int | None = None
+            for _ in range(100):  # up to 10 s
+                await _aio.sleep(0.1)
+                if port_file.exists():
+                    try:
+                        content = port_file.read_text().strip()
+                        port = int(content.split("\n")[0])
+                        break
+                    except (ValueError, IndexError):
+                        continue
+
+            if port is None:
+                raise RuntimeError("Browser did not expose a debug port in time")
+
+            # Connect via Playwright CDP and read cookies
+            from playwright.async_api import async_playwright
+
+            async with async_playwright() as p:
+                browser = await p.chromium.connect_over_cdp(
+                    f"http://localhost:{port}",
+                    timeout=10_000,
+                )
+                try:
+                    contexts = browser.contexts
+                    if not contexts:
+                        return None
+                    cookies = await contexts[0].cookies(
+                        ["https://www.linkedin.com"],
+                    )
+                    for c in cookies:
+                        if c["name"] == "li_at" and c.get("value"):
+                            return c["value"]
+                    return None
+                finally:
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+        finally:
+            try:
+                proc.terminate()
+                await _aio.wait_for(proc.wait(), timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+async def _try_extract_via_cdp() -> tuple[str | None, str | None]:
+    """Attempt CDP-based cookie extraction from Chrome or Edge.
+
+    Works **while the browser is running** — we copy the cookie database to
+    a temporary profile and launch a separate headless instance.
+
+    Returns ``(value, browser_name)`` on success, ``(None, error_msg)``
+    on failure.
+    """
+    browsers = _find_chromium_browsers()
+    if not browsers:
+        return None, "No Chrome or Edge installation found"
+
+    errors: list[str] = []
+    for name, binary, user_data_dir in browsers:
+        try:
+            value = await _cdp_extract_cookie(binary, user_data_dir)
+            if value:
+                return value, name
+            errors.append(f"{name}: no li_at cookie found (not logged in?)")
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+
+    return None, "; ".join(errors) if errors else "No browsers available"
+
+
+@router.post("/api/settings/cookies-extract")
+async def extract_cookies_from_browser(request: Request):
+    """Auto-extract the ``li_at`` cookie from an installed browser.
+
+    **Strategy:**
+
+    1. Try **Firefox** via ``browser_cookie3`` (quick, always works).
+    2. Try **Chrome / Edge** via CDP — copies the cookie database to a
+       temporary profile and launches the real browser binary headless.
+       Chrome decrypts its own app-bound cookies transparently.  Works
+       **while the browser is open** (no need to close it).
+    """
+    import asyncio as _aio
+
+    # 1. Quick attempt: Firefox via browser_cookie3
+    value, ff_info = await _aio.to_thread(_try_extract_firefox)
+    if value:
+        _save_li_at_to_file(request, value)
+        return {"saved": True, "browser": ff_info}
+
+    # 2. Chrome / Edge via CDP (copy DB → headless launch → extract)
+    value, cdp_info = await _try_extract_via_cdp()
+    if value:
+        _save_li_at_to_file(request, value)
+        return {"saved": True, "browser": cdp_info}
+
+    # Both failed — build a helpful composite error
+    parts = []
+    if ff_info:
+        parts.append(ff_info)
+    if cdp_info:
+        parts.append(cdp_info)
+    detail = " · ".join(parts) or "No browsers found"
+    return JSONResponse(
+        {"error": detail},
+        status_code=404,
+    )
+
+
+
+@router.get("/api/settings/extension-zip")
+async def download_extension_zip(request: Request):
+    """Serve the Chrome extension as a downloadable ZIP file."""
+    import io
+    import zipfile
+    from pathlib import Path
+
+    from fastapi.responses import StreamingResponse
+
+    ext_dir = Path(__file__).resolve().parent.parent / "static" / "extension"
+    if not ext_dir.is_dir():
+        return JSONResponse({"error": "Extension files not found"}, status_code=404)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fpath in sorted(ext_dir.iterdir()):
+            if fpath.is_file():
+                zf.write(fpath, f"ai-job-hunter-extension/{fpath.name}")
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": "attachment; filename=ai-job-hunter-extension.zip",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # LinkedIn remote login (programmatic, for headless / Docker environments)
 # ---------------------------------------------------------------------------
 
