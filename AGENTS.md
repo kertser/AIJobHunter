@@ -21,8 +21,8 @@ Two pipelines sharing one SQLite DB:
 - **reporting/** — `report.py` (`generate_report()` producing daily Markdown + JSON summaries under `data/reports/`)
 - **notifications/** — `email.py` with provider pattern: `BaseNotifier` (ABC) → `SmtpNotifier` (SMTP with optional auth, TLS, `last_error` diagnostics), `ResendNotifier` (API-key-based, free tier), `FakeNotifier` (tests); `build_notifier_from_settings()` auto-selects provider (Resend → SMTP fallback → None); `send_pipeline_summary()` and `send_test_email()` helpers
 - **scheduling/** — `scheduler.py`: `PipelineScheduler` wrapping APScheduler `AsyncIOScheduler`; cron trigger from `ScheduleConfig`; integrates with `TaskManager` (one-task-at-a-time); `wire(app_state)` + `start(config)` + `stop()` + `reschedule(config)`; records `ScheduleRunRecord` history to YAML; sends notification email on completion
-- **auth/** — `models.py` (`User` ORM — credentials, per-user settings overrides, email/notification prefs), `repo.py` (CRUD: `create_user`, `authenticate_user`, `update_user_profile`, `change_user_password`, `update_user_settings`, per-user data dirs), `security.py` (bcrypt password hashing, JWT access tokens via `python-jose`, standalone admin-password tokens); first registered user is auto-promoted to admin; per-user OpenAI keys, runtime flags, and email settings stored on the `User` row (NULL = inherit global)
-- **web/** — FastAPI + HTMX + Pico CSS; app factory in `app.py` (`app.state.dotenv_path` for settings persistence); login-required middleware (JWT cookie or `Authorization: Bearer` header); DI via `deps.py` (DB session, settings, task manager, `get_current_user`, `get_effective_settings` with per-user overlays, `require_admin` gate); routers under `web/routers/` (auth, account, admin, dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings, schedule); `TaskManager` in `task_manager.py` runs one background task at a time with SSE event broadcasting; settings router includes LinkedIn cookie paste (`POST /api/settings/cookies-paste` — primary method, user copies `li_at` from DevTools), cookie file upload/status/delete (`/api/settings/cookies*`), remote login (`/api/settings/linkedin-login`, `/api/settings/linkedin-verify`) with SSE progress streaming and two-phase verification-code flow via `asyncio.Future`, and checkpoint screenshot serving (`/api/settings/checkpoint-screenshot`) with frontend rendering via `SCREENSHOT:<filename>` SSE markers
+- **auth/** — `models.py` (`User` ORM — credentials, per-user settings overrides, email/notification prefs, LinkedIn OAuth token columns: `linkedin_access_token`, `linkedin_token_expires_at`, `linkedin_member_id`), `repo.py` (CRUD: `create_user`, `authenticate_user`, `update_user_profile`, `change_user_password`, `update_user_settings`, `get_user_by_linkedin_id`, `update_linkedin_token`, `clear_linkedin_token`, per-user data dirs), `security.py` (bcrypt password hashing, JWT access tokens via `python-jose`, standalone admin-password tokens); first registered user is auto-promoted to admin; per-user OpenAI keys, runtime flags, and email settings stored on the `User` row (NULL = inherit global)
+- **web/** — FastAPI + HTMX + Pico CSS; app factory in `app.py` (`app.state.dotenv_path` for settings persistence); login-required middleware (JWT cookie or `Authorization: Bearer` header); DI via `deps.py` (DB session, settings, task manager, `get_current_user`, `get_effective_settings` with per-user overlays, `require_admin` gate); routers under `web/routers/` (auth, linkedin_oauth, account, admin, dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings, schedule); `TaskManager` in `task_manager.py` runs one background task at a time with SSE event broadcasting; **LinkedIn OAuth BFF** in `routers/linkedin_oauth.py` (`GET /auth/linkedin` — redirect to LinkedIn authorization, `GET /auth/linkedin/callback` — exchange code for token + auto-register/login, `POST /api/settings/linkedin-disconnect` — clear stored token, `GET /api/settings/linkedin-status` — connection status; tokens stored server-side on `User` row, never exposed to browser; OIDC scopes `openid profile email`; CSRF protection via `state` cookie; auto-registers new users or links existing by email/LinkedIn ID); settings router includes LinkedIn cookie auto-extraction (`POST /api/settings/cookies-extract` — tries Firefox via `browser_cookie3` then Chrome/Edge via CDP headless launch with real browser binary for app-bound cookie decryption), cookie paste (`POST /api/settings/cookies-paste` — user copies `li_at` from DevTools), Chrome extension download (`GET /api/settings/extension-zip` — bundled extension at `web/static/extension/` reads `li_at` via `chrome.cookies` API), cookie file upload/status/delete (`/api/settings/cookies*`), remote login (`/api/settings/linkedin-login`, `/api/settings/linkedin-verify`) with SSE progress streaming and two-phase verification-code flow via `asyncio.Future`, and checkpoint screenshot serving (`/api/settings/checkpoint-screenshot`) with frontend rendering via `SCREENSHOT:<filename>` SSE markers
 - **profile/** — `extract.py` (PDF text + LinkedIn scraping), `generator.py` (LLM profile generation)
 - **utils/** — `hashing.py` (SHA-256 job dedup), `logging.py` (namespaced logger setup), `rate_limit.py` (`RateLimiter` — token-bucket for browser automation), `retry.py` (`retry` decorator with exponential back-off, works for sync and async functions)
 
@@ -88,9 +88,29 @@ Self-contained under `src/job_hunter/market/`. Detailed execution plan: **`agent
 - Autonomous social probing (explicitly out of scope)
 - Fairness-aware reranking and ESCO integration
 
+## Development Environment
+
+Primary development is on **Windows** (PowerShell). All commands in this document use **cross-platform** syntax (`uv`, `pytest`) that works on both Windows and Linux/macOS.
+
+**Windows (PowerShell) equivalents for common Unix commands:**
+
+| Unix | PowerShell | Notes |
+|---|---|---|
+| `cat file` | `Get-Content file` | |
+| `head -n 20 file` | `Get-Content file -Head 20` | |
+| `tail -n 20 file` | `Get-Content file -Tail 20` | |
+| `tail -f file` | `Get-Content file -Wait -Tail 20` | |
+| `grep pattern file` | `Select-String -Pattern "pattern" file` | |
+| `find . -name "*.py"` | `Get-ChildItem -Recurse -Filter *.py` | |
+| `wc -l file` | `(Get-Content file \| Measure-Object -Line).Lines` | |
+| `export VAR=val` | `$env:VAR = "val"` | session-scoped |
+| `chmod +x script.sh` | N/A | not needed on Windows |
+| `./deploy.sh` | Use Docker Desktop or WSL | Linux-only deploy script |
+| `cp .env.example .env` | `Copy-Item .env.example .env` | |
+
 ## Build & Run
 
-```bash
+```powershell
 uv sync                                    # install all deps (including dev group)
 uv run hunt --help                         # CLI help
 uv run hunt --mock --dry-run run --profile default   # offline test of full pipeline
@@ -101,7 +121,7 @@ uv run hunt --real --dry-run serve          # web GUI at localhost:8000
 
 All tests run **fully offline** — no API keys or internet. Run with:
 
-```bash
+```powershell
 uv run pytest -q                # quick
 uv run pytest -v                # verbose
 uv run pytest tests/test_web.py # single file
@@ -126,7 +146,7 @@ Key test patterns:
 - **Job dedup**: SHA-256 hash of `(external_id, title, company)` via `utils/hashing.py`. `upsert_job()` checks hash before insert.
 - **Market idempotency**: `UNIQUE(event_type, job_hash)` for events; `UNIQUE(event_id, extractor_version)` for extractions; `UNIQUE(entity_type, canonical_name)` for entities; `UNIQUE(src_entity_id, dst_entity_id, edge_type)` for edges. Re-running any stage produces no duplicates.
 - **Web DI**: Dependencies (`get_db`, `get_settings`, `get_task_manager`, `get_current_user`, `get_effective_settings`) read from `request.app.state` — set during lifespan or pre-injected in tests. `get_effective_settings()` overlays per-user values from the `User` row onto global `AppSettings`.
-- **Authentication**: JWT-based sessions via `access_token` cookie (7-day expiry). `login_required_middleware` redirects unauthenticated page requests to `/login` and returns 401 for API calls. Public paths: `/login`, `/register`, `/api/auth/`, `/api/health`, `/static/`, `/favicon.ico`. Admin panel protected by a separate `admin_token` cookie (1-hour, standalone password gate via `require_admin`).
+- **Authentication**: JWT-based sessions via `access_token` cookie (7-day expiry). `login_required_middleware` redirects unauthenticated page requests to `/login` and returns 401 for API calls. Public paths: `/login`, `/register`, `/api/auth/`, `/api/health`, `/static/`, `/favicon.ico`, `/api/settings/cookies-paste` (public for browser extension), `/auth/linkedin` and `/auth/linkedin/callback` (OAuth flow), `/api/settings/linkedin-status` (login/register page check). Admin panel protected by a separate `admin_token` cookie (1-hour, standalone password gate via `require_admin`). CORS middleware allows `chrome-extension://` and `localhost` origins for the extension's cross-origin cookie-paste requests. **LinkedIn OAuth BFF**: server-side Authorization Code flow via `httpx`; tokens stored on `User` row, never exposed to browser; CSRF protection via `state` cookie; OIDC scopes `openid profile email`; auto-registers new users or links existing by email/LinkedIn member ID; "Sign in with LinkedIn" buttons on login/register pages (conditionally shown when `JOBHUNTER_LINKEDIN_CLIENT_ID` etc. are configured).
 - **Multi-user**: Each user has a per-user data directory (`data/users/<user_id>/`). Per-user settings (OpenAI key, runtime flags, email config) stored on the `User` row; NULL means inherit global `AppSettings`. `get_effective_settings()` merges these overlays. First registered user is auto-promoted to admin. Account settings (email, display name, password) managed at `/account`.
 - **Scheduling**: `PipelineScheduler` wraps APScheduler's `AsyncIOScheduler`. Requires a running event loop; tests must be `@pytest.mark.asyncio async`. Config persisted to YAML via `model_dump(mode="json")` (not plain `model_dump()` — avoids Python enum YAML tags).
 - **Logging**: All loggers namespaced under `job_hunter.*` (e.g., `job_hunter.matching.scoring`, `job_hunter.market.graph.builder`, `job_hunter.scheduling`). Configured via `utils/logging.py`.
@@ -152,12 +172,12 @@ All contents of `data/` except `.gitkeep` are gitignored (including `data/users/
 
 ## Deployment
 
-`deploy.sh` in the project root handles full Docker deployment:
+`deploy.sh` in the project root handles full Docker deployment (Linux/macOS only — on Windows use Docker Desktop or WSL):
 
 ```bash
 chmod +x deploy.sh
 ./deploy.sh          # stop → prune → git pull → build → run on port 80
 ```
 
-See also `docker-compose.yml` for compose-based deployment and `Dockerfile` for the image definition.
+See also `docker-compose.yml` for compose-based deployment (works on all platforms) and `Dockerfile` for the image definition.
 

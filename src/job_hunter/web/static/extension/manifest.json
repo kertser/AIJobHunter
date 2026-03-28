@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "AI Job Hunter — LinkedIn Cookie Helper",
+  "version": "1.0",
+  "description": "One-click extraction of your LinkedIn session cookie for AI Job Hunter.",
+  "permissions": ["cookies", "storage"],
+  "host_permissions": [
+    "*://*.linkedin.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icon48.png"
+    }
+  },
+  "icons": {
+    "48": "icon48.png"
+  }
+}
+
