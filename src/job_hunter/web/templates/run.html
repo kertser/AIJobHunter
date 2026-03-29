@@ -220,6 +220,21 @@
   </div>
   <div id="step-tracker" class="step-tracker" style="display: none;"></div>
   <div class="progress-log" id="progress-log">Waiting for task…</div>
+  <!-- ═══ CAPTCHA interaction panel (hidden by default) ═══ -->
+  <div id="captcha-panel" style="display: none; padding: 0.8rem 1rem; border-top: 1px solid var(--pico-muted-border-color); background: rgba(240,173,78,0.06);">
+    <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem;">
+      <span style="font-size: 1.1rem;">🔒</span>
+      <strong style="font-size: 0.85rem;">CAPTCHA Detected — Click on the image to solve it</strong>
+      <button type="button" onclick="cancelCaptchaClick()" class="outline secondary" style="width: auto; font-size: 0.75rem; padding: 0.2rem 0.7rem; margin-left: auto;">
+        🛑 Stop
+      </button>
+    </div>
+    <div style="text-align: center;">
+      <img id="captcha-screenshot" src="" alt="CAPTCHA screenshot"
+           style="max-width: 100%; cursor: crosshair; border: 3px solid #f0ad4e; border-radius: 6px;"
+           onclick="onCaptchaScreenshotClick(event)">
+    </div>
+  </div>
 </div>
 {% endblock %}
 
@@ -230,6 +245,8 @@
   let timerInterval = null;
   let stepCount = 0;
   let currentStep = 0;
+  let _captchaClickPending = false;
+  let _captchaActive = false;
 
   // Step definitions per task type
   const TASK_STEPS = {
@@ -334,7 +351,40 @@
     evtSource = new EventSource('/api/run/status');
 
     evtSource.addEventListener('progress', function(e) {
-      log.innerHTML += colorLine(e.data) + '\n';
+      var d = e.data || '';
+
+      // Intercept remote-click mode markers for CAPTCHA solving
+      if (d === 'REMOTE_CLICK_START') {
+        _captchaActive = true;
+        document.getElementById('captcha-panel').style.display = '';
+        log.innerHTML += '<span class="log-warn">🔒 CAPTCHA detected — solve it by clicking on the image below</span>\n';
+        log.scrollTop = log.scrollHeight;
+        return;
+      }
+      if (d === 'REMOTE_CLICK_STOP') {
+        _captchaActive = false;
+        _captchaClickPending = false;
+        document.getElementById('captcha-panel').style.display = 'none';
+        return;
+      }
+
+      // Intercept screenshot markers — show image in CAPTCHA panel
+      if (d.indexOf('SCREENSHOT:') === 0) {
+        var fname = d.substring('SCREENSHOT:'.length);
+        var img = document.getElementById('captcha-screenshot');
+        img.src = '/api/settings/checkpoint-screenshot?name=' + encodeURIComponent(fname) + '&_t=' + Date.now();
+        // Reset click debounce — fresh screenshot ready
+        _captchaClickPending = false;
+        if (_captchaActive) {
+          img.style.opacity = '1';
+          img.style.cursor = 'crosshair';
+        }
+        log.innerHTML += '<span class="log-dim">📸 ' + escHtml(fname) + '</span>\n';
+        log.scrollTop = log.scrollHeight;
+        return;
+      }
+
+      log.innerHTML += colorLine(d) + '\n';
       log.scrollTop = log.scrollHeight;
     });
 
@@ -346,6 +396,8 @@
       label.textContent = '✅ Done — ' + name;
       setButtons(false);
       stopTimer();
+      _captchaActive = false;
+      document.getElementById('captcha-panel').style.display = 'none';
       evtSource.close();
     });
 
@@ -357,6 +409,8 @@
       showToast('Task failed! Check the progress log.');
       setButtons(false);
       stopTimer();
+      _captchaActive = false;
+      document.getElementById('captcha-panel').style.display = 'none';
       evtSource.close();
     });
 
@@ -411,5 +465,63 @@
   fetch('/api/run/task-status').then(function(r){return r.json()}).then(function(s){
     if(s.running) startTask(s.task_name || 'task');
   });
+
+  /* ── CAPTCHA screenshot click handling ── */
+  function onCaptchaScreenshotClick(e) {
+    if (!_captchaActive || _captchaClickPending) return;
+    var img = e.target;
+    // Scale from displayed image size to 1280×900 viewport
+    var scaleX = 1280 / img.clientWidth;
+    var scaleY = 900 / img.clientHeight;
+    var x = Math.round(e.offsetX * scaleX);
+    var y = Math.round(e.offsetY * scaleY);
+
+    _captchaClickPending = true;
+    img.style.opacity = '0.8';
+
+    var log = document.getElementById('progress-log');
+    log.innerHTML += '<span class="log-dim">🖱️ Click (' + x + ', ' + y + ')</span>\n';
+    log.scrollTop = log.scrollHeight;
+
+    fetch('/api/run/captcha-click', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({x: x, y: y}),
+    }).then(function(r) {
+      return r.json().then(function(data) {
+        if (!r.ok) {
+          log.innerHTML += '<span class="log-err">❌ ' + escHtml(data.error || 'Click failed') + '</span>\n';
+        }
+      });
+    }).catch(function(err) {
+      log.innerHTML += '<span class="log-err">Error: ' + escHtml(String(err)) + '</span>\n';
+    }).finally(function() {
+      // Re-enable quickly for rapid clicking (image challenges)
+      setTimeout(function() {
+        _captchaClickPending = false;
+        if (_captchaActive) {
+          img.style.cursor = 'crosshair';
+          img.style.opacity = '1';
+        }
+      }, 300);
+    });
+  }
+
+  function cancelCaptchaClick() {
+    fetch('/api/run/captcha-click', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cancel: true}),
+    }).then(function(r) { return r.json(); })
+     .then(function() {
+       var log = document.getElementById('progress-log');
+       log.innerHTML += '<span class="log-warn">Cancelling CAPTCHA interaction…</span>\n';
+       log.scrollTop = log.scrollHeight;
+     })
+     .catch(function(err) {
+       var log = document.getElementById('progress-log');
+       log.innerHTML += '<span class="log-err">Error: ' + escHtml(String(err)) + '</span>\n';
+     });
+  }
 </script>
 {% endblock %}

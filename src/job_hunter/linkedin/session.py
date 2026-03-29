@@ -32,6 +32,17 @@ _STEALTH_ARGS = [
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
     "--disable-ipc-flooding-protection",
+    # ── Additional anti-fingerprint flags ──
+    "--disable-features=AutomationControlled,TranslateUI",
+    "--disable-hang-monitor",
+    "--disable-popup-blocking",
+    "--disable-prompt-on-repost",
+    "--metrics-recording-only",
+    "--password-store=basic",
+    "--use-mock-keychain",
+    "--export-tagged-pdf",
+    # Don't announce headless in HTTP headers
+    "--disable-features=HeadlessMode",
 ]
 
 # Stealth init-script shared by all browser contexts
@@ -171,6 +182,87 @@ _STEALTH_SCRIPT = """
         }
         return el;
     };
+
+    // ── Canvas fingerprint noise (subtle per-session variation) ──────
+    // Real browsers produce slightly different canvas output due to GPU/driver
+    // differences. Headless Chromium produces a perfectly deterministic result.
+    // Adding minimal noise makes the fingerprint look organic.
+    const _origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function(type) {
+        if (this.width > 16 && this.height > 16) {
+            const ctx = this.getContext('2d');
+            if (ctx) {
+                // Tiny invisible pixel modification — changes the hash but not appearance
+                const style = ctx.fillStyle;
+                ctx.fillStyle = 'rgba(0,0,1,0.003)';
+                ctx.fillRect(0, 0, 1, 1);
+                ctx.fillStyle = style;
+            }
+        }
+        return _origToDataURL.apply(this, arguments);
+    };
+    const _origToBlob = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.toBlob = function(cb, type, quality) {
+        if (this.width > 16 && this.height > 16) {
+            const ctx = this.getContext('2d');
+            if (ctx) {
+                const style = ctx.fillStyle;
+                ctx.fillStyle = 'rgba(0,0,1,0.003)';
+                ctx.fillRect(0, 0, 1, 1);
+                ctx.fillStyle = style;
+            }
+        }
+        return _origToBlob.apply(this, arguments);
+    };
+
+    // ── AudioContext fingerprint ─────────────────────────────────────
+    // Headless Chromium returns identical AudioContext output. Real browsers
+    // have slight variations due to sound hardware.
+    if (typeof AudioContext !== 'undefined') {
+        const _origGetChannelData = AudioBuffer.prototype.getChannelData;
+        AudioBuffer.prototype.getChannelData = function(channel) {
+            const data = _origGetChannelData.call(this, channel);
+            if (data.length > 100) {
+                // Inject imperceptible noise
+                for (let i = 0; i < Math.min(10, data.length); i++) {
+                    data[i] += 1e-7 * (Math.random() - 0.5);
+                }
+            }
+            return data;
+        };
+    }
+
+    // ── SpeechSynthesis voices (real Chrome has these) ───────────────
+    if (typeof speechSynthesis !== 'undefined') {
+        const _origGetVoices = speechSynthesis.getVoices.bind(speechSynthesis);
+        speechSynthesis.getVoices = function() {
+            const voices = _origGetVoices();
+            if (voices.length === 0) {
+                // Headless Chromium often returns empty voices list — fake it
+                return [{
+                    voiceURI: 'Google US English', name: 'Google US English',
+                    lang: 'en-US', localService: false, default: true,
+                }];
+            }
+            return voices;
+        };
+    }
+
+    // ── Consistent Date.prototype.getTimezoneOffset ─────────────────
+    // Ensure timezone offset matches the timezone_id set on the context
+    const _origGetTZOffset = Date.prototype.getTimezoneOffset;
+    // America/New_York is UTC-5 (300 min) or UTC-4 (240 min, DST)
+    // Don't override if it already matches a reasonable US timezone
+    if (typeof Date.prototype.getTimezoneOffset === 'function') {
+        const testOffset = new Date().getTimezoneOffset();
+        if (testOffset === 0) {
+            // Headless UTC default — override to look like US East
+            Date.prototype.getTimezoneOffset = function() { return 240; };
+        }
+    }
+
+    // ── navigator.maxTouchPoints (desktops should report 0) ─────────
+    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
 """
 
 
@@ -1453,6 +1545,158 @@ class LinkedInSession:
             len(cookies), profile_dir,
         )
         return context
+
+
+async def solve_captcha_interactively(
+    page: Any,
+    *,
+    get_remote_click: Callable[[], Any],
+    screenshot_dir: Path,
+    progress: Callable[[str], None] | None = None,
+    timeout_s: int = 300,
+) -> bool:
+    """Solve a CAPTCHA challenge interactively via remote screenshots & clicks.
+
+    This is a standalone helper designed for use **outside** the login flow
+    (e.g. during job discovery or application).  It:
+
+      1. Attempts to auto-click the reCAPTCHA checkbox.
+      2. If an image challenge appears (or auto-click fails), enters a
+         remote-interaction loop where screenshots are streamed to the UI
+         and the user clicks on them.
+      3. Returns ``True`` when ``detect_challenge(page)`` reports the
+         challenge is gone, ``False`` on timeout/cancellation.
+
+    *get_remote_click* is an async/sync callable returning ``{"x": …, "y": …}``
+    or ``None`` to cancel.  *progress* receives human-readable status messages
+    (and ``SCREENSHOT:``, ``REMOTE_CLICK_START``, ``REMOTE_CLICK_STOP`` markers
+    consumed by the frontend).
+    """
+    import asyncio as _aio
+    import time
+
+    from job_hunter.linkedin.forms import detect_challenge
+
+    def _prog(msg: str) -> None:
+        logger.info(msg)
+        if progress:
+            progress(msg)
+
+    # ── Step 1: try reCAPTCHA auto-click ────────────────────────────
+    _prog("🔍 Attempting to auto-solve reCAPTCHA…")
+
+    anchor = None
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        for f in page.frames:
+            furl = f.url or ""
+            if "recaptcha" in furl and "anchor" in furl:
+                anchor = f
+                break
+        if anchor:
+            break
+        await page.wait_for_timeout(500)
+
+    checkbox_clicked = False
+    if anchor is not None:
+        try:
+            cb = anchor.locator("#recaptcha-anchor")
+            await cb.wait_for(state="attached", timeout=10_000)
+            await page.wait_for_timeout(1000)
+            await cb.click(force=True, timeout=5_000)
+            checkbox_clicked = True
+            _prog("✅ Clicked reCAPTCHA checkbox.")
+        except Exception as exc:
+            _prog(f"Auto-click on reCAPTCHA failed: {exc}")
+
+    if checkbox_clicked:
+        _prog("Waiting for reCAPTCHA result…")
+        await page.wait_for_timeout(5000)
+        if not await detect_challenge(page):
+            _prog("✅ reCAPTCHA auto-solved!")
+            return True
+
+    # ── Step 2: enter remote-click interaction loop ──────────────────
+    REFRESH_INTERVAL = 2.0
+
+    _prog("REMOTE_CLICK_START")
+    _prog(
+        "🖱️ CAPTCHA detected — click on the screenshot to solve it. "
+        "Click 'Stop' when done."
+    )
+
+    start = time.monotonic()
+    click_count = 0
+
+    try:
+        while click_count < 200 and (time.monotonic() - start) < timeout_s:
+            # Take viewport screenshot
+            ss = await LinkedInSession._take_viewport_screenshot(
+                page, screenshot_dir, "remote_click", _prog,
+            )
+            if ss is None:
+                _prog("⚠️ Screenshot failed — retrying…")
+                await page.wait_for_timeout(2000)
+                continue
+
+            # Wait for click from user (short timeout for auto-refresh)
+            try:
+                click_data = get_remote_click()
+                if _aio.isfuture(click_data) or _aio.iscoroutine(click_data):
+                    click_data = await _aio.wait_for(click_data, timeout=REFRESH_INTERVAL)
+            except _aio.TimeoutError:
+                # No click — check if challenge resolved on its own
+                if not await detect_challenge(page):
+                    _prog("✅ Challenge cleared!")
+                    return True
+                continue
+            except Exception as exc:
+                _prog(f"Error: {exc}")
+                break
+
+            if click_data is None:
+                _prog("Remote interaction stopped by user.")
+                break
+
+            # Drain stale clicks — keep only the latest
+            latest = click_data
+            try:
+                while True:
+                    peek = get_remote_click()
+                    if _aio.isfuture(peek) or _aio.iscoroutine(peek):
+                        peek = await _aio.wait_for(peek, timeout=0.01)
+                    if peek is None:
+                        _prog("Remote interaction stopped by user.")
+                        _prog("REMOTE_CLICK_STOP")
+                        # Final check — maybe the challenge was already solved
+                        return not await detect_challenge(page)
+                    latest = peek
+            except (_aio.TimeoutError, Exception):
+                pass
+
+            x = latest.get("x", 0)
+            y = latest.get("y", 0)
+            click_count += 1
+
+            try:
+                await page.mouse.click(x, y)
+            except Exception as exc:
+                _prog(f"Click failed: {exc}")
+                continue
+
+            _prog(f"🖱️ #{click_count} ({x}, {y})")
+            await page.wait_for_timeout(800)
+
+            # Check if challenge cleared after click
+            if not await detect_challenge(page):
+                _prog("✅ Challenge cleared after click!")
+                return True
+
+    finally:
+        _prog("REMOTE_CLICK_STOP")
+
+    # Final check
+    return not await detect_challenge(page)
 
 
 def build_search_url(

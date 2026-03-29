@@ -70,12 +70,19 @@ async def discover_jobs(
     seniority: list[str] | None = None,
     max_pages: int = 10,
     openai_api_key: str = "",
+    captcha_handler: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Discover jobs matching the given profile.
 
     When *mock* is ``True`` the discovery navigates a local HTTP server
     serving the HTML fixtures.  Otherwise it navigates real LinkedIn
     using saved cookies.
+
+    *captcha_handler* is an optional async callable ``(page, screenshot_dir) → bool``
+    that is invoked when a CAPTCHA/challenge blocks discovery.  It should
+    solve the challenge interactively (e.g. via screenshot streaming + remote
+    clicks) and return ``True`` if the challenge was cleared.  When ``None``,
+    the original error-raising behaviour is preserved.
 
     Returns a list of dicts, each containing all fields needed to create
     a ``Job`` DB row.
@@ -93,6 +100,7 @@ async def discover_jobs(
         seniority=seniority,
         max_pages=max_pages,
         openai_api_key=openai_api_key,
+        captcha_handler=captcha_handler,
     )
 
 
@@ -458,8 +466,18 @@ async def _discover_real(
     seniority: list[str] | None = None,
     max_pages: int = 10,
     openai_api_key: str = "",
+    captcha_handler: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Run discovery against real LinkedIn using saved cookies."""
+    """Run discovery against real LinkedIn using saved cookies.
+
+    Uses extensive human-simulation techniques to avoid CAPTCHA triggers:
+    - Organic warm-up browsing (feed → jobs hub → search)
+    - Random mouse movements between actions
+    - Natural scroll patterns with jitter
+    - Variable delays modelled on real human timing
+    - Cookie refresh mid-session
+    - Referer headers on every navigation
+    """
     import random
 
     from playwright.async_api import async_playwright
@@ -475,32 +493,108 @@ async def _discover_real(
             "Upload cookies via Settings in the web UI, or run 'hunt login' locally."
         )
 
-    rate = RateLimiter(min_delay_ms=2000, max_delay_ms=5000)
+    # Slower, more variable pacing — mimics a human who reads content
+    rate = RateLimiter(min_delay_ms=3000, max_delay_ms=7000)
     jobs: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
 
+    # ── Human-like interaction helpers ──────────────────────────────────
+
+    async def _human_delay(lo: float = 1.0, hi: float = 3.0) -> None:
+        """Random pause — models a human reading / thinking."""
+        await page.wait_for_timeout(int(random.uniform(lo, hi) * 1000))
+
+    async def _random_mouse_move(page_obj: Any) -> None:
+        """Move mouse to a random spot — real users always have mouse activity."""
+        try:
+            x = random.randint(200, 1080)
+            y = random.randint(150, 750)
+            await page_obj.mouse.move(x, y, steps=random.randint(5, 20))
+        except Exception:
+            pass
+
+    async def _human_scroll(page_obj: Any) -> None:
+        """Scroll like a human — varying speeds, pauses, not exact percentages."""
+        scroll_positions = sorted(random.sample(range(15, 95), k=random.randint(3, 6)))
+        for pct in scroll_positions:
+            actual_pct = pct + random.uniform(-5, 5)
+            await page_obj.evaluate(
+                f"window.scrollTo({{top: document.body.scrollHeight * {actual_pct / 100}, "
+                f"behavior: 'smooth'}})"
+            )
+            if random.random() < 0.3:
+                await _human_delay(1.5, 3.5)  # "reading" pause
+            else:
+                await _human_delay(0.6, 1.5)  # quick scroll
+            if random.random() < 0.4:
+                await _random_mouse_move(page_obj)
+
+    async def _solve_captcha_or_fail(page_obj: Any, context_label: str) -> bool:
+        """Unified CAPTCHA handling: auto-solve → interactive → give up.
+
+        Returns True if challenge is cleared (or was never present).
+        Returns False if unresolvable (caller decides what to do).
+        """
+        if not await detect_challenge(page_obj):
+            return True
+
+        logger.warning("Challenge/captcha detected on %s. Attempting to solve…", context_label)
+
+        # Step 1: auto-click reCAPTCHA checkbox
+        solved = await try_solve_recaptcha(page_obj, timeout_ms=15_000)
+        if solved:
+            logger.info("reCAPTCHA clicked — waiting for page to update…")
+            await page_obj.wait_for_timeout(5000)
+            if not await detect_challenge(page_obj):
+                logger.info("reCAPTCHA solved — continuing.")
+                return True
+
+        # Step 2: interactive handler (web UI remote clicks)
+        if await detect_challenge(page_obj) and captcha_handler is not None:
+            logger.info("Trying interactive CAPTCHA solving on %s…", context_label)
+            screenshot_dir = Path(cookies_path).parent
+            handler_solved = await captcha_handler(page_obj, screenshot_dir)
+            if handler_solved and not await detect_challenge(page_obj):
+                logger.info("Interactive CAPTCHA solving succeeded!")
+                return True
+
+        # Step 3: still blocked
+        if await detect_challenge(page_obj):
+            return False
+        return True
+
+    # ═══════════════════════════════════════════════════════════════════
+
     async with async_playwright() as pw:
-        # Use persistent stealth context — reuses the same browser profile
-        # across sessions, making LinkedIn see a returning visitor rather
-        # than a fresh anonymous bot.  This dramatically reduces CAPTCHAs.
         context = await session.launch_stealth_context(
             pw, headless=headless, slowmo_ms=slowmo_ms,
         )
         page = context.pages[0] if context.pages else await context.new_page()
 
         try:
-            # Step 0: Verify cookies are valid by visiting the feed
+            # ═══════════════════════════════════════════════════════════
+            # Phase 0: Warm-up — organic browsing to establish normalcy
+            # ═══════════════════════════════════════════════════════════
+            # A real user arrives at LinkedIn, glances at the feed, maybe
+            # checks notifications, THEN navigates to Jobs.  We replicate
+            # this path so LinkedIn's session scoring sees normal behaviour.
+
             logger.info("Verifying LinkedIn login status…")
-            await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30_000)
-            # Human-like variable delay while "reading" the feed
-            await page.wait_for_timeout(random.randint(3000, 5000))
+            await page.goto(
+                "https://www.linkedin.com/feed/",
+                wait_until="domcontentloaded",
+                timeout=30_000,
+            )
+            # "Read" the feed for a realistic duration
+            await _human_delay(3.0, 6.0)
+            await _random_mouse_move(page)
+
             current_url = page.url
             if "/login" in current_url or "/checkpoint" in current_url or "authwall" in current_url:
                 logger.error(
                     "Cookies are expired or invalid — redirected to %s. "
-                    "Run 'hunt login' to re-authenticate.", current_url
+                    "Run 'hunt login' to re-authenticate.", current_url,
                 )
-                # Save updated cookies anyway in case some were refreshed
                 new_cookies = await context.cookies()
                 session.save_cookies(new_cookies)
                 raise RuntimeError(
@@ -508,7 +602,6 @@ async def _discover_real(
                     f"Run 'hunt login' to re-authenticate."
                 )
 
-            # Check if we see the feed (page key should not be guest)
             page_html = await page.content()
             if "d_jobs_guest" in page_html or "public_jobs" in page_html:
                 logger.warning("LinkedIn is serving guest pages despite cookies. Re-login required.")
@@ -518,9 +611,48 @@ async def _discover_real(
                 )
 
             logger.info("Login verified — session is active.")
-            # Save refreshed cookies
+
+            # Scroll the feed a bit and move mouse — looks like a real user
+            await _human_scroll(page)
+            await _random_mouse_move(page)
+            await _human_delay(1.0, 3.0)
+
+            # Save refreshed cookies after warm-up
             new_cookies = await context.cookies()
             session.save_cookies(new_cookies)
+
+            # ── Navigate organically to Jobs hub first ──
+            # Instead of jumping straight to a search URL, go to the Jobs
+            # tab like a real user would (via the nav bar link).
+            logger.info("Navigating to Jobs hub…")
+            try:
+                jobs_link = page.locator('a[href*="/jobs/"]').first
+                if await jobs_link.count() > 0:
+                    await _random_mouse_move(page)
+                    await jobs_link.click()
+                    await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                else:
+                    await page.goto(
+                        "https://www.linkedin.com/jobs/",
+                        wait_until="domcontentloaded",
+                        timeout=30_000,
+                    )
+            except Exception:
+                await page.goto(
+                    "https://www.linkedin.com/jobs/",
+                    wait_until="domcontentloaded",
+                    timeout=30_000,
+                )
+            await _human_delay(2.0, 5.0)
+            await _random_mouse_move(page)
+
+            # Refresh cookies — LinkedIn may set new tokens after Jobs nav
+            new_cookies = await context.cookies()
+            session.save_cookies(new_cookies)
+
+            # ═══════════════════════════════════════════════════════════
+            # Phase 1: Search pages
+            # ═══════════════════════════════════════════════════════════
 
             for page_num in range(max_pages):
                 search_url = build_search_url(
@@ -533,13 +665,22 @@ async def _discover_real(
                 logger.info("Navigating to search page %d: %s", page_num + 1, search_url)
                 await rate.wait()
 
-                # Use domcontentloaded — LinkedIn's pages never reach "networkidle"
-                # due to persistent WebSocket/analytics connections
-                await page.goto(search_url, wait_until="domcontentloaded", timeout=30_000)
-                # Give React time to hydrate and render job cards (human-like)
-                await page.wait_for_timeout(random.randint(3000, 5000))
+                # Navigate with referer — looks like internal navigation
+                await page.goto(
+                    search_url,
+                    wait_until="domcontentloaded",
+                    timeout=30_000,
+                    referer="https://www.linkedin.com/jobs/",
+                )
+                # Longer wait for first page, shorter for subsequent
+                if page_num == 0:
+                    await _human_delay(4.0, 7.0)
+                else:
+                    await _human_delay(3.0, 5.0)
 
-                # Wait for either job cards to appear or a timeout
+                await _random_mouse_move(page)
+
+                # Wait for job cards to appear
                 try:
                     await page.wait_for_selector(
                         'a[href*="/jobs/view/"], div.job-card-container, '
@@ -551,46 +692,13 @@ async def _discover_real(
                 except Exception:
                     logger.debug("No job elements after 15s, trying scroll…")
 
-                # Scroll to trigger lazy-loaded job cards
-                for scroll_pct in [0.3, 0.5, 0.7, 1.0]:
-                    await page.evaluate(
-                        f"window.scrollTo(0, document.body.scrollHeight * {scroll_pct})"
-                    )
-                    await page.wait_for_timeout(random.randint(1000, 2500))
+                # Human-like scrolling to load lazy content
+                await _human_scroll(page)
+                await _random_mouse_move(page)
 
-                # Check for challenge
-                if await detect_challenge(page):
-                    logger.warning(
-                        "Challenge/captcha detected on search page %d. "
-                        "Attempting to solve reCAPTCHA…",
-                        page_num + 1,
-                    )
-
-                    # Try clicking the reCAPTCHA checkbox
-                    solved = await try_solve_recaptcha(page, timeout_ms=15_000)
-                    if solved:
-                        logger.info("reCAPTCHA clicked — waiting for page to update…")
-                        await page.wait_for_timeout(5000)
-
-                        # Check if the challenge is gone
-                        if not await detect_challenge(page):
-                            logger.info("reCAPTCHA solved — continuing discovery.")
-                            # Re-navigate to the search page to get fresh results
-                            await page.goto(search_url, wait_until="domcontentloaded", timeout=30_000)
-                            await page.wait_for_timeout(3000)
-
-                            # Verify the challenge is really gone
-                            if not await detect_challenge(page):
-                                continue  # proceed with normal card parsing below
-                            # else: fall through to error
-
-                    logger.warning(
-                        "Could not auto-solve captcha on search page %d. "
-                        "Try running with headless=False (Settings → uncheck Headless) "
-                        "so you can solve the captcha manually.",
-                        page_num + 1,
-                    )
-                    # Save the page for debugging
+                # ── CAPTCHA check ──
+                captcha_clear = await _solve_captcha_or_fail(page, f"search page {page_num + 1}")
+                if not captcha_clear:
                     challenge_html = await page.content()
                     debug_path = Path(cookies_path).parent / "debug_search_page.html"
                     debug_path.write_text(challenge_html[:100000], encoding="utf-8")
@@ -600,6 +708,12 @@ async def _discover_real(
                         "The browser will open visibly so you can solve the captcha. "
                         "Alternatively, run 'hunt login' to refresh your session."
                     )
+
+                # After CAPTCHA, re-navigate if we ended up elsewhere
+                if page.url != search_url and "/jobs/search" not in page.url:
+                    await page.goto(search_url, wait_until="domcontentloaded", timeout=30_000)
+                    await _human_delay(3.0, 5.0)
+                    await _human_scroll(page)
 
                 # Check if we got redirected to login
                 current_url = page.url
@@ -613,13 +727,11 @@ async def _discover_real(
                 # Parse job cards from the page
                 list_html = await page.content()
 
-                # Always save debug HTML for the first page
                 if page_num == 0:
                     debug_path = Path(cookies_path).parent / "debug_search_page.html"
                     debug_path.write_text(list_html[:100000], encoding="utf-8")
                     logger.info("Saved search page HTML to %s (%d bytes)", debug_path, len(list_html))
 
-                # Check if we got a guest page instead of logged-in results
                 if "d_jobs_guest" in list_html or "public_jobs_nav" in list_html:
                     logger.warning("Search page served as guest despite login verification.")
                     raise RuntimeError(
@@ -631,7 +743,6 @@ async def _discover_real(
                 cards = parse_job_cards(list_html)
                 logger.info("Page %d: found %d job cards via CSS selectors", page_num + 1, len(cards))
 
-                # Fallback: try JS-based extraction if CSS selectors found nothing
                 if not cards:
                     logger.info("CSS selectors matched nothing. Trying JS-based extraction…")
                     cards = await _extract_jobs_via_js(page)
@@ -639,7 +750,6 @@ async def _discover_real(
 
                 if not cards:
                     if page_num == 0:
-                        # First page with 0 results is unexpected
                         title = await page.title()
                         current_page_url = page.url
                         logger.warning(
@@ -649,31 +759,36 @@ async def _discover_real(
                             title, current_page_url,
                         )
                     else:
-                        # Subsequent pages with 0 results = end of results
                         logger.info("No more job cards on page %d — end of results.", page_num + 1)
                     break
 
-                # Visit each card's detail page
+                # ═══════════════════════════════════════════════════════
+                # Phase 2: Visit detail pages
+                # ═══════════════════════════════════════════════════════
+
                 for card in cards:
                     ext_id = card.get("external_id", "")
                     if not ext_id or ext_id in seen_ids:
                         continue
                     seen_ids.add(ext_id)
 
-                    # Build clean detail URL (strip tracking params)
                     detail_url = f"https://www.linkedin.com/jobs/view/{ext_id}/"
 
                     await rate.wait()
                     logger.info("Fetching detail: %s (%s)", ext_id, card.get("title", "?"))
+                    await _random_mouse_move(page)
 
                     detail: dict[str, Any] = {}
                     try:
-                        await page.goto(detail_url, wait_until="domcontentloaded", timeout=20_000)
+                        await page.goto(
+                            detail_url,
+                            wait_until="domcontentloaded",
+                            timeout=20_000,
+                            referer=search_url,
+                        )
+                        await _human_delay(2.5, 5.0)
+                        await _random_mouse_move(page)
 
-                        # Wait for the page content to render (React SPA)
-                        await page.wait_for_timeout(random.randint(2500, 4500))
-
-                        # Try to wait for description or expandable text to appear
                         try:
                             await page.wait_for_selector(
                                 "[data-testid='expandable-text-box'], "
@@ -682,35 +797,25 @@ async def _discover_real(
                                 timeout=8_000,
                             )
                         except Exception:
-                            await page.wait_for_timeout(3000)
+                            await _human_delay(2.0, 4.0)
 
-                        if await detect_challenge(page):
-                            logger.warning("Challenge detected on detail page — attempting reCAPTCHA…")
-                            solved = await try_solve_recaptcha(page, timeout_ms=15_000)
-                            if solved:
-                                await page.wait_for_timeout(5000)
-                                if not await detect_challenge(page):
-                                    logger.info("reCAPTCHA solved on detail page — continuing.")
-                                else:
-                                    logger.warning("Challenge persists on detail page. Stopping.")
-                                    return jobs
-                            else:
-                                logger.warning("Could not solve captcha on detail page. Stopping.")
-                                return jobs
+                        # CAPTCHA check on detail page
+                        if not await _solve_captcha_or_fail(page, f"detail page {ext_id}"):
+                            logger.warning("Unresolvable CAPTCHA on detail page. Stopping.")
+                            return jobs
 
-                        # Click all "Show more" / "… more" / "See more" buttons
-                        # to expand truncated description sections
+                        # Expand truncated descriptions
                         await _expand_all_show_more(page)
 
-                        # Save first detail page HTML for debugging
+                        # Scroll to "read" the description (human behaviour)
+                        await _human_scroll(page)
+
                         if len(seen_ids) <= 1:
                             detail_html_debug = await page.content()
                             debug_detail = Path(cookies_path).parent / "debug_detail_page.html"
                             debug_detail.write_text(detail_html_debug[:200000], encoding="utf-8")
                             logger.info("Saved detail page HTML to %s", debug_detail)
 
-                        # Extract all job details via JS — this understands LinkedIn's
-                        # 2025-2026 SPA structure where content is in dynamic React components
                         detail = await _extract_detail_via_js(page)
 
                         desc_len = len(detail.get("description_text", ""))
@@ -723,18 +828,15 @@ async def _discover_real(
                             detail.get("easy_apply", False),
                         )
 
-
                     except Exception as exc:
                         logger.warning("Failed to fetch detail for %s: %s", ext_id, exc)
 
-                    # Clean the description: use LLM if API key available
                     raw_desc = detail.get("description_text", "")
                     if openai_api_key and raw_desc:
                         cleaned_desc = clean_description_llm(raw_desc, openai_api_key)
                     else:
                         cleaned_desc = clean_description_rules(raw_desc)
 
-                    # Parse posted date from relative text
                     posted_at_text = detail.get("posted_at_text", "")
                     posted_at = _parse_relative_date(posted_at_text)
                     if posted_at_text:
@@ -759,7 +861,18 @@ async def _discover_real(
                     jobs.append(job_data)
                     logger.debug("Discovered: %s at %s", job_data["title"], job_data["company"])
 
+                # Periodically refresh cookies to keep session alive
+                if page_num % 3 == 2:
+                    new_cookies = await context.cookies()
+                    session.save_cookies(new_cookies)
+
         finally:
+            # Save cookies one final time before closing
+            try:
+                final_cookies = await context.cookies()
+                session.save_cookies(final_cookies)
+            except Exception:
+                pass
             await context.close()
 
     logger.info("Real discovery complete: %d jobs found", len(jobs))
