@@ -505,7 +505,36 @@ async def _find_recaptcha_frame(page: PageOrFrame) -> Any | None:
                 if "bframe" in frame_url:
                     logger.debug("Skipping reCAPTCHA bframe (image challenge): %s", frame.url)
                     continue
-                logger.debug("Found reCAPTCHA frame by URL: %s", frame.url)
+                # Check if the hosting <iframe> element is actually visible.
+                # LinkedIn routinely loads hidden reCAPTCHA iframes that are
+                # never shown to users — matching by URL alone causes false
+                # positives.
+                try:
+                    iframe_element = await frame.frame_element()
+                    visible = await iframe_element.is_visible()
+                    if not visible:
+                        logger.debug(
+                            "reCAPTCHA frame found by URL but iframe is hidden — "
+                            "skipping (not a blocking challenge): %s",
+                            frame.url,
+                        )
+                        continue
+                    # Also skip tiny/zero-size iframes (common anti-bot decoys)
+                    box = await iframe_element.bounding_box()
+                    if box and (box["width"] < 10 or box["height"] < 10):
+                        logger.debug(
+                            "reCAPTCHA frame is tiny (%dx%d) — skipping: %s",
+                            box["width"], box["height"], frame.url,
+                        )
+                        continue
+                except Exception as exc:
+                    logger.debug(
+                        "Could not verify visibility of reCAPTCHA frame "
+                        "(possibly detached) — skipping: %s (%s)",
+                        frame.url, exc,
+                    )
+                    continue
+                logger.debug("Found visible reCAPTCHA frame by URL: %s", frame.url)
                 return frame
 
     logger.debug("No reCAPTCHA iframe found on page.")
