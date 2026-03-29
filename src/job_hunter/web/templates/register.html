@@ -65,28 +65,9 @@
     <div class="alt-link">
       Already have an account? <a href="/login">Sign in →</a>
     </div>
-
-    <div id="linkedin-oauth-divider" style="display:none; text-align: center; margin: 1.2rem 0 0.8rem; position: relative;">
-      <hr style="margin: 0; border-color: #e2e8f0;">
-      <span style="position: relative; top: -0.75rem; background: #fff; padding: 0 0.8rem; font-size: 0.82rem; color: #94a3b8;">or</span>
-    </div>
-    <a href="/auth/linkedin" id="linkedin-signup-btn" role="button" class="secondary"
-       style="display:none; width: 100%; text-align: center; gap: 0.5rem;">
-      🔗 Sign up with LinkedIn
-    </a>
   </div>
 
   <script>
-  // Check if LinkedIn OAuth is configured and show the button
-  fetch('/api/settings/linkedin-status')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.oauth_configured) {
-        document.getElementById('linkedin-oauth-divider').style.display = '';
-        document.getElementById('linkedin-signup-btn').style.display = '';
-      }
-    })
-    .catch(function() {});
   // Check if this is the first user and show admin password field
   fetch('/api/auth/is-first-user')
     .then(function(r) { return r.json(); })

@@ -81,13 +81,6 @@ def run_migrations(engine: Engine) -> None:
         if _create_index_if_missing(engine, ix_name, table, "user_id"):
             changes += 1
 
-    # ── v3: add LinkedIn OAuth columns to users ──
-    if _add_column_if_missing(engine, "users", "linkedin_access_token", "TEXT"):
-        changes += 1
-    if _add_column_if_missing(engine, "users", "linkedin_token_expires_at", "TIMESTAMP"):
-        changes += 1
-    if _add_column_if_missing(engine, "users", "linkedin_member_id", "VARCHAR(255)"):
-        changes += 1
 
     if changes:
         logger.info("migration: applied %d change(s)", changes)

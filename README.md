@@ -73,7 +73,7 @@ and matches your skills against market demand.
 | **Mock mode** | Full pipeline testable offline with HTML fixtures — no API keys needed |
 | **CLI** | `hunt` command with 10+ subcommands and global flags |
 | **`.env` support** | API keys and settings from `.env` file |
-| **SQLite database** | Job, Score, ApplicationAttempt + 15 market tables, WAL mode |
+| **SQLite database** | Job, Score, ApplicationAttempt + 13 market tables, WAL mode |
 
 ---
 
@@ -99,7 +99,7 @@ Verify the installation:
 
 ```bash
 uv run hunt --help
-uv run pytest -q          # 305 tests, all offline
+uv run pytest -q          # 377 tests, all offline
 ```
 
 ---
@@ -270,7 +270,7 @@ Open **http://localhost:8000** in your browser.
 | **Resume Review** | `/resume-review` | AI gap analysis — missing skills, improvement suggestions, quick wins |
 | **Reports** | `/reports` | Browse and view daily pipeline + market reports |
 | **Account** | `/account` | Personal account settings — edit display name, email, change password |
-| **Settings** | `/settings` | Toggle mock/dry-run/headless, configure email notifications, update API keys |
+| **Settings** | `/settings` | Toggle mock/dry-run/headless, configure LinkedIn session cookies, email notifications, API keys |
 | **Schedule** | `/schedule` | Cron-style automation — set time, days, pipeline mode, view run history |
 | **Admin** | `/admin` | User management, profile management, database reset (admin-password protected) |
 | **Setup** | `/onboarding` | Upload resume PDF + LinkedIn URL to generate profiles (first-run wizard) |
@@ -288,6 +288,7 @@ The web GUI is login-protected. All pages (except login/register) require a vali
 1. **First user** — when no users exist, the registration page is shown automatically. The first registered user is auto-promoted to **admin** and can optionally set the **admin panel password**.
 2. **Subsequent users** — can register while `JOBHUNTER_REGISTRATION_ENABLED=true` (default).
 3. **Sessions** — JWT-based via `access_token` cookie (7-day expiry). Logging in from another browser/device replaces the session.
+
 
 ### Account Settings
 
@@ -562,7 +563,9 @@ uv run hunt --real --dry-run serve
 | `JOBHUNTER_SMTP_PASSWORD` | For SMTP | `""` | SMTP password |
 | `JOBHUNTER_SMTP_USE_TLS` | No | `true` | Use TLS for SMTP |
 
-Create a `.env` file in the project root:
+> **All settings are GUI-configurable.** You can set every variable above from the **Settings** page in the web GUI — no need to manually edit `.env`. Settings saved from the GUI are automatically persisted to `.env` and survive restarts.
+
+Create a `.env` file in the project root (or configure everything from the GUI):
 
 ```bash
 JOBHUNTER_OPENAI_API_KEY=sk-proj-...
@@ -663,6 +666,8 @@ Configurable via `--data-dir` or `JOBHUNTER_DATA_DIR`.
 | Field | Type | Description |
 |---|---|---|
 | `id` | UUID | Primary key |
+| `user_id` | UUID (nullable) | FK to `users` — multi-user data isolation |
+| `source` | string | Job source (default `"linkedin"`) |
 | `external_id` | string | LinkedIn job ID |
 | `title` | string | Job title |
 | `company` | string | Company name |
@@ -672,12 +677,15 @@ Configurable via `--data-dir` or `JOBHUNTER_DATA_DIR`.
 | `easy_apply` | bool | Easy Apply available |
 | `hash` | string | SHA-256 dedup hash |
 | `status` | enum | `new` → `scored` → `queued` → `applied` / `skipped` / `blocked` / `review` / `failed` |
+| `notes` | text | User notes on the job |
 
 ### Score
 
 | Field | Type | Description |
 |---|---|---|
+| `user_id` | UUID (nullable) | FK to `users` — multi-user data isolation |
 | `job_hash` | string | References Job |
+| `resume_id` | string | Resume identifier (default `"default"`) |
 | `embedding_similarity` | float | Cosine similarity (0.0–1.0) |
 | `llm_fit_score` | int | LLM evaluation (0–100) |
 | `missing_skills` | JSON | Skills the candidate lacks |
@@ -688,12 +696,13 @@ Configurable via `--data-dir` or `JOBHUNTER_DATA_DIR`.
 
 | Field | Type | Description |
 |---|---|---|
+| `user_id` | UUID (nullable) | FK to `users` — multi-user data isolation |
 | `job_hash` | string | References Job |
 | `result` | enum | `success` / `failed` / `blocked` / `dry_run` / `already_applied` |
 | `failure_stage` | string | Which wizard step failed |
 | `form_answers_json` | JSON | Answers submitted in the form |
 
-### Market Tables (15 total)
+### Market Tables (13 total)
 
 | Table | Purpose |
 |---|---|
@@ -788,7 +797,7 @@ AIJobHunter/
 │   │   ├── dialogue.py                   # Dialogue session CRUD
 │   │   ├── dialogue_eval.py              # Session evaluation (RuleBased/Fake)
 │   │   ├── report.py                     # Market intelligence report generation
-│   │   ├── db_models.py                  # 15 SQLAlchemy market tables
+│   │   ├── db_models.py                  # 13 SQLAlchemy market tables
 │   │   ├── schemas.py                    # Extraction I/O Pydantic models
 │   │   ├── repo.py                       # Market CRUD helpers
 │   │   ├── graph/
@@ -828,7 +837,7 @@ AIJobHunter/
 │       ├── retry.py                      # Exponential back-off decorator
 │       └── hashing.py                    # SHA-256 job dedup
 │
-├── tests/                                # 305 tests — all run fully offline
+├── tests/                                # 377 tests — all run fully offline
 │   ├── test_web.py                       # Web GUI endpoints (incl. schedule, settings, email)
 │   ├── test_market.py                    # Market Intelligence (all stages)
 │   ├── test_notifications.py             # Email providers + pipeline summary
@@ -863,7 +872,7 @@ uv run pytest tests/test_market.py  # Market Intelligence tests
 uv run pytest -k "test_upsert"     # Pattern matching
 ```
 
-**Current:** 305 tests passed.
+**Current:** 377 tests passed.
 
 Tests use fake implementations for all external services:
 - `FakeEmbedder` — fixed similarity scores
