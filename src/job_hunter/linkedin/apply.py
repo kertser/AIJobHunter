@@ -327,26 +327,32 @@ async def apply_to_job(
             logger.warning("Failed to initialize LLM form filler: %s", exc)
 
     async with async_playwright() as pw:
-        stealth_args = ["--disable-blink-features=AutomationControlled"]
-        try:
-            browser = await pw.chromium.launch(
-                headless=headless, slow_mo=slowmo_ms, channel="chrome",
-                args=stealth_args,
-            )
-        except Exception:
-            browser = await pw.chromium.launch(
-                headless=headless, slow_mo=slowmo_ms,
-                args=stealth_args,
-            )
-
-        # Use authenticated session with saved cookies (like discover does)
+        # Use persistent stealth context for real LinkedIn (same profile as
+        # discover), fall back to a plain browser for mock mode.
         session = LinkedInSession(cookies_path=cookies_path)
+        _using_persistent = False
+
         if session.has_cookies() and not mock:
-            context = await session.create_context(browser)
-            page = await context.new_page()
-            logger.info("Using saved cookies for authentication")
+            context = await session.launch_stealth_context(
+                pw, headless=headless, slowmo_ms=slowmo_ms,
+            )
+            page = context.pages[0] if context.pages else await context.new_page()
+            _using_persistent = True
+            logger.info("Using persistent stealth context for authentication")
         else:
+            from job_hunter.linkedin.session import _STEALTH_ARGS
+            try:
+                browser = await pw.chromium.launch(
+                    headless=headless, slow_mo=slowmo_ms, channel="chrome",
+                    args=_STEALTH_ARGS,
+                )
+            except Exception:
+                browser = await pw.chromium.launch(
+                    headless=headless, slow_mo=slowmo_ms,
+                    args=_STEALTH_ARGS,
+                )
             page = await browser.new_page()
+            context = None
             if not mock:
                 logger.warning("No saved cookies — page may load as guest")
 
@@ -1097,7 +1103,10 @@ async def apply_to_job(
 
         finally:
             result["ended_at"] = datetime.now(timezone.utc)
-            await browser.close()
+            if _using_persistent:
+                await context.close()
+            else:
+                await browser.close()
 
     return result
 

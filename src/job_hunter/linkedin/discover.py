@@ -460,6 +460,8 @@ async def _discover_real(
     openai_api_key: str = "",
 ) -> list[dict[str, Any]]:
     """Run discovery against real LinkedIn using saved cookies."""
+    import random
+
     from playwright.async_api import async_playwright
 
     from job_hunter.linkedin.forms import detect_challenge, try_solve_recaptcha
@@ -478,30 +480,20 @@ async def _discover_real(
     seen_ids: set[str] = set()
 
     async with async_playwright() as pw:
-        # Prefer real Chrome (channel="chrome") — harder for LinkedIn to fingerprint
-        # than Playwright's bundled Chromium.
-        # --disable-blink-features=AutomationControlled hides the automation flag.
-        stealth_args = ["--disable-blink-features=AutomationControlled"]
-        try:
-            browser = await pw.chromium.launch(
-                headless=headless, slow_mo=slowmo_ms, channel="chrome",
-                args=stealth_args,
-            )
-            logger.info("Launched Chrome (channel=chrome)")
-        except Exception:
-            browser = await pw.chromium.launch(
-                headless=headless, slow_mo=slowmo_ms,
-                args=stealth_args,
-            )
-            logger.info("Launched Chromium (default)")
-        context = await session.create_context(browser)
-        page = await context.new_page()
+        # Use persistent stealth context — reuses the same browser profile
+        # across sessions, making LinkedIn see a returning visitor rather
+        # than a fresh anonymous bot.  This dramatically reduces CAPTCHAs.
+        context = await session.launch_stealth_context(
+            pw, headless=headless, slowmo_ms=slowmo_ms,
+        )
+        page = context.pages[0] if context.pages else await context.new_page()
 
         try:
             # Step 0: Verify cookies are valid by visiting the feed
             logger.info("Verifying LinkedIn login status…")
             await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30_000)
-            await page.wait_for_timeout(3000)
+            # Human-like variable delay while "reading" the feed
+            await page.wait_for_timeout(random.randint(3000, 5000))
             current_url = page.url
             if "/login" in current_url or "/checkpoint" in current_url or "authwall" in current_url:
                 logger.error(
@@ -544,8 +536,8 @@ async def _discover_real(
                 # Use domcontentloaded — LinkedIn's pages never reach "networkidle"
                 # due to persistent WebSocket/analytics connections
                 await page.goto(search_url, wait_until="domcontentloaded", timeout=30_000)
-                # Give React time to hydrate and render job cards
-                await page.wait_for_timeout(3000)
+                # Give React time to hydrate and render job cards (human-like)
+                await page.wait_for_timeout(random.randint(3000, 5000))
 
                 # Wait for either job cards to appear or a timeout
                 try:
@@ -564,7 +556,7 @@ async def _discover_real(
                     await page.evaluate(
                         f"window.scrollTo(0, document.body.scrollHeight * {scroll_pct})"
                     )
-                    await page.wait_for_timeout(1500)
+                    await page.wait_for_timeout(random.randint(1000, 2500))
 
                 # Check for challenge
                 if await detect_challenge(page):
@@ -679,7 +671,7 @@ async def _discover_real(
                         await page.goto(detail_url, wait_until="domcontentloaded", timeout=20_000)
 
                         # Wait for the page content to render (React SPA)
-                        await page.wait_for_timeout(3000)
+                        await page.wait_for_timeout(random.randint(2500, 4500))
 
                         # Try to wait for description or expandable text to appear
                         try:
@@ -769,7 +761,6 @@ async def _discover_real(
 
         finally:
             await context.close()
-            await browser.close()
 
     logger.info("Real discovery complete: %d jobs found", len(jobs))
     return jobs
