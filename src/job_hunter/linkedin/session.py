@@ -14,6 +14,26 @@ LINKEDIN_BASE = "https://www.linkedin.com"
 LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login"
 LINKEDIN_FEED_URL = "https://www.linkedin.com/feed/"
 
+# Chrome user-agent string — keep this updated with a recent stable version
+_CHROME_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/136.0.0.0 Safari/537.36"
+)
+
+# Common stealth launch args shared by all browser launches
+_STEALTH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-dev-shm-usage",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-infobars",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-ipc-flooding-protection",
+]
+
 # Stealth init-script shared by all browser contexts
 _STEALTH_SCRIPT = """
     // ── Core automation flags ──────────────────────────────────────
@@ -23,13 +43,29 @@ _STEALTH_SCRIPT = """
     Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
     Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
 
+    // ── Remove CDP artifacts that leak automation ────────────────
+    // Playwright injects Runtime.enable — delete tell-tale traces
+    delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+    delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+    delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+
     // ── Chrome runtime (must look like a real Chrome window) ───────
-    window.chrome = {
-        runtime: { onConnect: { addListener: function(){} },
-                   onMessage: { addListener: function(){} } },
-        loadTimes: function(){ return {} },
-        csi:       function(){ return {} },
+    if (!window.chrome) {
+        window.chrome = {};
+    }
+    window.chrome.runtime = window.chrome.runtime || {
+        onConnect:       { addListener: function(){} },
+        onMessage:       { addListener: function(){} },
+        sendMessage:     function(){},
+        connect:         function(){ return { onMessage: { addListener: function(){} } } },
+        getManifest:     function(){ return {} },
+        getURL:          function(p){ return p },
+        PlatformOs:      { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux' },
+        PlatformArch:    { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64' },
+        RequestUpdateCheckStatus: { THROTTLED: 'throttled', NO_UPDATE: 'no_update', UPDATE_AVAILABLE: 'update_available' },
     };
+    window.chrome.loadTimes = window.chrome.loadTimes || function(){ return {} };
+    window.chrome.csi       = window.chrome.csi       || function(){ return {} };
 
     // ── Plugins (real Chrome always has these three) ───────────────
     Object.defineProperty(navigator, 'plugins', {
@@ -47,6 +83,19 @@ _STEALTH_SCRIPT = """
         }
     });
 
+    // ── mimeTypes to match plugins ─────────────────────────────────
+    Object.defineProperty(navigator, 'mimeTypes', {
+        get: () => {
+            const mt = [
+                { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: { name: 'Chrome PDF Plugin' } },
+            ];
+            mt.length = 1;
+            mt.item = i => mt[i];
+            mt.namedItem = n => mt.find(m => m.type === n);
+            return mt;
+        }
+    });
+
     // ── Permissions API ────────────────────────────────────────────
     if (navigator.permissions) {
         const _origQuery = navigator.permissions.query.bind(navigator.permissions);
@@ -56,6 +105,18 @@ _STEALTH_SCRIPT = """
                 : _origQuery(p);
     }
 
+    // ── Screen dimensions (consistent with viewport) ───────────────
+    Object.defineProperty(screen, 'width',     { get: () => 1920 });
+    Object.defineProperty(screen, 'height',    { get: () => 1080 });
+    Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
+    Object.defineProperty(screen, 'availHeight',{ get: () => 1040 });
+    Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+    Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+    if (window.screenX !== undefined) {
+        Object.defineProperty(window, 'outerWidth',  { get: () => 1920 });
+        Object.defineProperty(window, 'outerHeight', { get: () => 1040 });
+    }
+
     // ── WebGL vendor / renderer (Intel iGPU is most common) ───────
     const _getP = WebGLRenderingContext.prototype.getParameter;
     WebGLRenderingContext.prototype.getParameter = function(p) {
@@ -63,11 +124,53 @@ _STEALTH_SCRIPT = """
         if (p === 37446) return 'Intel Iris OpenGL Engine';
         return _getP.call(this, p);
     };
+    // Also patch WebGL2 if available
+    if (typeof WebGL2RenderingContext !== 'undefined') {
+        const _getP2 = WebGL2RenderingContext.prototype.getParameter;
+        WebGL2RenderingContext.prototype.getParameter = function(p) {
+            if (p === 37445) return 'Intel Inc.';
+            if (p === 37446) return 'Intel Iris OpenGL Engine';
+            return _getP2.call(this, p);
+        };
+    }
 
     // ── Connection info ────────────────────────────────────────────
     Object.defineProperty(navigator, 'connection', {
         get: () => ({ effectiveType: '4g', rtt: 50, downlink: 10, saveData: false })
     });
+
+    // ── Battery API (real browsers expose this) ────────────────────
+    if (!navigator.getBattery) {
+        navigator.getBattery = () => Promise.resolve({
+            charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1,
+            addEventListener: function(){}, removeEventListener: function(){}
+        });
+    }
+
+    // ── Notification (default to 'default' — not 'denied') ─────────
+    if (typeof Notification !== 'undefined') {
+        Object.defineProperty(Notification, 'permission', { get: () => 'default' });
+    }
+
+    // ── Prevent iframe contentWindow detection ─────────────────────
+    // Some fingerprinters create an iframe and check contentWindow.chrome
+    const _origCreateElement = document.createElement.bind(document);
+    document.createElement = function(tag, opts) {
+        const el = _origCreateElement(tag, opts);
+        if (tag.toLowerCase() === 'iframe') {
+            const _origGet = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow').get;
+            Object.defineProperty(el, 'contentWindow', {
+                get: function() {
+                    const win = _origGet.call(this);
+                    if (win) {
+                        try { win.chrome = window.chrome; } catch(e) {}
+                    }
+                    return win;
+                }
+            });
+        }
+        return el;
+    };
 """
 
 
@@ -110,26 +213,19 @@ class LinkedInSession:
         logger.info("Launching browser for LinkedIn login…")
 
         async with async_playwright() as pw:
-            _stealth_args = [
-                "--disable-blink-features=AutomationControlled",
-            ]
             try:
                 browser = await pw.chromium.launch(
                     headless=headless, slow_mo=slowmo_ms, channel="chrome",
-                    args=_stealth_args,
+                    args=_STEALTH_ARGS,
                 )
             except Exception:
                 browser = await pw.chromium.launch(
-                    headless=headless, slow_mo=slowmo_ms, args=_stealth_args,
+                    headless=headless, slow_mo=slowmo_ms, args=_STEALTH_ARGS,
                 )
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 900},
                 locale="en-US",
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/131.0.0.0 Safari/537.36"
-                ),
+                user_agent=_CHROME_USER_AGENT,
             )
             await context.add_init_script(_STEALTH_SCRIPT)
             page = await context.new_page()
@@ -255,14 +351,6 @@ class LinkedInSession:
         _progress("Launching browser…")
 
         async with async_playwright() as pw:
-            _stealth_args = [
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-infobars",
-            ]
-
             # ── Persistent profile: LinkedIn sees a returning visitor ──
             profile_dir = self.cookies_path.parent / "browser_profile"
             profile_dir.mkdir(parents=True, exist_ok=True)
@@ -273,15 +361,11 @@ class LinkedInSession:
                     headless=headless,
                     slow_mo=slowmo_ms,
                     channel="chrome",
-                    args=_stealth_args,
+                    args=_STEALTH_ARGS,
                     viewport={"width": 1280, "height": 900},
                     locale="en-US",
                     timezone_id="America/New_York",
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/131.0.0.0 Safari/537.36"
-                    ),
+                    user_agent=_CHROME_USER_AGENT,
                 )
             except Exception:
                 # Fallback: Chromium without channel="chrome"
@@ -289,15 +373,11 @@ class LinkedInSession:
                     user_data_dir=str(profile_dir),
                     headless=headless,
                     slow_mo=slowmo_ms,
-                    args=_stealth_args,
+                    args=_STEALTH_ARGS,
                     viewport={"width": 1280, "height": 900},
                     locale="en-US",
                     timezone_id="America/New_York",
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/131.0.0.0 Safari/537.36"
-                    ),
+                    user_agent=_CHROME_USER_AGENT,
                 )
 
             await context.add_init_script(_STEALTH_SCRIPT)
@@ -1294,17 +1374,18 @@ class LinkedInSession:
         """Create an authenticated browser context using saved cookies.
 
         Returns a Playwright BrowserContext with cookies pre-loaded.
+
+        .. note:: Prefer :meth:`launch_stealth_context` for real LinkedIn
+           automation — it uses a persistent browser profile which is
+           dramatically harder for LinkedIn to fingerprint.
         """
         cookies = self.load_cookies()
 
         context = await browser.new_context(
             viewport={"width": 1280, "height": 900},
             locale="en-US",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
+            timezone_id="America/New_York",
+            user_agent=_CHROME_USER_AGENT,
         )
 
         # Stealth: mask automation indicators so LinkedIn doesn't serve guest pages
@@ -1312,6 +1393,65 @@ class LinkedInSession:
 
         await context.add_cookies(cookies)
         logger.info("Browser context created with %d cookies", len(cookies))
+        return context
+
+    async def launch_stealth_context(
+        self,
+        pw: Any,
+        *,
+        headless: bool = True,
+        slowmo_ms: int = 0,
+    ) -> Any:
+        """Launch a persistent browser context with full stealth measures.
+
+        Uses a **persistent browser profile** stored alongside the cookies
+        file so LinkedIn sees a returning visitor with history, localStorage,
+        and cached data rather than a fresh browser each time.  This is the
+        same approach used by :meth:`remote_login` and is far less likely to
+        trigger CAPTCHA challenges than a fresh throwaway context.
+
+        The returned context acts as *both* browser and context (persistent
+        context pattern).  The caller must ``await context.close()`` when done
+        — there is no separate ``browser.close()`` call.
+
+        Returns a Playwright BrowserContext with cookies and stealth injected.
+        """
+        cookies = self.load_cookies()
+
+        profile_dir = self.cookies_path.parent / "browser_profile"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            context = await pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=headless,
+                slow_mo=slowmo_ms,
+                channel="chrome",
+                args=_STEALTH_ARGS,
+                viewport={"width": 1280, "height": 900},
+                locale="en-US",
+                timezone_id="America/New_York",
+                user_agent=_CHROME_USER_AGENT,
+            )
+        except Exception:
+            # Fallback: bundled Chromium (no real Chrome installed)
+            context = await pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=headless,
+                slow_mo=slowmo_ms,
+                args=_STEALTH_ARGS,
+                viewport={"width": 1280, "height": 900},
+                locale="en-US",
+                timezone_id="America/New_York",
+                user_agent=_CHROME_USER_AGENT,
+            )
+
+        await context.add_init_script(_STEALTH_SCRIPT)
+        await context.add_cookies(cookies)
+        logger.info(
+            "Persistent stealth context created with %d cookies (profile: %s)",
+            len(cookies), profile_dir,
+        )
         return context
 
 
