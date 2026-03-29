@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from job_hunter.config.loader import load_profiles, load_user_profile
@@ -115,39 +116,63 @@ async def run_discover(request: Request):
 
     captured_user_id = user_id
 
+    # Create a Queue for remote click coordinates (interactive CAPTCHA solving).
+    click_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    request.app.state._discovery_click_queue = click_queue
+
     async def _run():
-        logger.info(
-            "Discover params: mock=%s, headless=%s, keywords=%s, location=%s, "
-            "remote=%s, seniority=%s, cookies=%s",
-            params["mock"], params["headless"],
-            params.get("keywords", []), params.get("location", ""),
-            params.get("remote", False), params.get("seniority"),
-            params["cookies_path"],
-        )
-        job_dicts = await discover_jobs(
-            profile_name=params["profile_name"],
-            mock=params["mock"],
-            headless=params["headless"],
-            slowmo_ms=params["slowmo_ms"],
-            cookies_path=params["cookies_path"],
-            keywords=params.get("keywords", []),
-            location=params.get("location", ""),
-            remote=params.get("remote", False),
-            seniority=params.get("seniority"),
-            openai_api_key=params.get("openai_api_key", ""),
-        )
-        logger.info("Discover returned %d jobs", len(job_dicts))
-        if not job_dicts:
-            logger.warning("No jobs discovered. Check the progress log above for details.")
-        session = make_session(engine)
-        for jd in job_dicts:
-            job = Job(**jd)
-            if captured_user_id is not None:
-                job.user_id = captured_user_id
-            upsert_job(session, job, user_id=captured_user_id)
-        session.commit()
-        session.close()
-        return {"discovered": len(job_dicts)}
+        try:
+            # Build the interactive captcha handler closure.
+            # It uses solve_captcha_interactively from session.py with the click queue.
+            async def _captcha_handler(page, screenshot_dir):
+                from job_hunter.linkedin.session import solve_captcha_interactively
+
+                async def _get_click():
+                    return await click_queue.get()
+
+                return await solve_captcha_interactively(
+                    page,
+                    get_remote_click=_get_click,
+                    screenshot_dir=screenshot_dir,
+                    progress=logger.info,
+                    timeout_s=300,
+                )
+
+            logger.info(
+                "Discover params: mock=%s, headless=%s, keywords=%s, location=%s, "
+                "remote=%s, seniority=%s, cookies=%s",
+                params["mock"], params["headless"],
+                params.get("keywords", []), params.get("location", ""),
+                params.get("remote", False), params.get("seniority"),
+                params["cookies_path"],
+            )
+            job_dicts = await discover_jobs(
+                profile_name=params["profile_name"],
+                mock=params["mock"],
+                headless=params["headless"],
+                slowmo_ms=params["slowmo_ms"],
+                cookies_path=params["cookies_path"],
+                keywords=params.get("keywords", []),
+                location=params.get("location", ""),
+                remote=params.get("remote", False),
+                seniority=params.get("seniority"),
+                openai_api_key=params.get("openai_api_key", ""),
+                captcha_handler=_captcha_handler,
+            )
+            logger.info("Discover returned %d jobs", len(job_dicts))
+            if not job_dicts:
+                logger.warning("No jobs discovered. Check the progress log above for details.")
+            session = make_session(engine)
+            for jd in job_dicts:
+                job = Job(**jd)
+                if captured_user_id is not None:
+                    job.user_id = captured_user_id
+                upsert_job(session, job, user_id=captured_user_id)
+            session.commit()
+            session.close()
+            return {"discovered": len(job_dicts)}
+        finally:
+            request.app.state._discovery_click_queue = None
 
     tm.start_task("discover", _run())
     return JSONResponse({"started": "discover"}, status_code=202)
@@ -352,8 +377,31 @@ async def run_pipeline_endpoint(request: Request):
 
     from job_hunter.orchestration.pipeline import run_pipeline
 
-    coro = run_pipeline(**params)
-    tm.start_task("pipeline", coro)
+    # Create click queue for interactive CAPTCHA solving during discover phase
+    click_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    request.app.state._discovery_click_queue = click_queue
+
+    async def _captcha_handler(page, screenshot_dir):
+        from job_hunter.linkedin.session import solve_captcha_interactively
+
+        async def _get_click():
+            return await click_queue.get()
+
+        return await solve_captcha_interactively(
+            page,
+            get_remote_click=_get_click,
+            screenshot_dir=screenshot_dir,
+            progress=logger.info,
+            timeout_s=300,
+        )
+
+    async def _run():
+        try:
+            return await run_pipeline(**params, captcha_handler=_captcha_handler)
+        finally:
+            request.app.state._discovery_click_queue = None
+
+    tm.start_task("pipeline", _run())
     return JSONResponse({"started": "pipeline"}, status_code=202)
 
 
@@ -440,6 +488,38 @@ async def run_report(request: Request):
         })
     finally:
         session.close()
+
+
+class CaptchaClickRequest(BaseModel):
+    """Remote click on a CAPTCHA screenshot during discovery."""
+    x: float = 0
+    y: float = 0
+    cancel: bool = False
+
+
+@router.post("/api/run/captcha-click")
+async def captcha_click(body: CaptchaClickRequest, request: Request):
+    """Send a click to the running discovery's interactive CAPTCHA solver.
+
+    The frontend translates image click coordinates to the 1280×900 viewport
+    and POSTs them here.  The discovery task picks them up from the queue and
+    executes the click via Playwright.
+
+    Send ``{"cancel": true}`` to stop the interaction loop.
+    """
+    queue: asyncio.Queue | None = getattr(
+        request.app.state, "_discovery_click_queue", None,
+    )
+    if queue is None:
+        return JSONResponse(
+            {"error": "No discovery task is waiting for CAPTCHA clicks."},
+            status_code=400,
+        )
+    if body.cancel:
+        await queue.put(None)
+        return {"submitted": True, "action": "cancel"}
+    await queue.put({"x": body.x, "y": body.y})
+    return {"submitted": True, "action": "click", "x": body.x, "y": body.y}
 
 
 @router.get("/api/run/status")

@@ -55,6 +55,7 @@ async def run_pipeline(
     location: str = "",
     remote: bool = False,
     seniority: list[str] | None = None,
+    captcha_handler: Any | None = None,
 ) -> dict[str, Any]:
     """Execute the full pipeline for a given search profile.
 
@@ -94,6 +95,7 @@ async def run_pipeline(
         location=location,
         remote=remote,
         seniority=seniority,
+        captcha_handler=captcha_handler,
     )
     for jd in job_dicts:
         job = Job(**jd)
