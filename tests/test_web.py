@@ -1653,6 +1653,32 @@ def test_extension_zip_download(client):
 
 
 # ---------------------------------------------------------------------------
+# LinkedIn Browser Login (headed Playwright — primary method)
+# ---------------------------------------------------------------------------
+
+
+def test_linkedin_browser_login_starts_task(client):
+    """POST /api/settings/linkedin-browser-login returns 202 and starts a background task."""
+    r = client.post("/api/settings/linkedin-browser-login")
+    # May be 202 (started) or 409 (another task running) — both are valid
+    assert r.status_code in (202, 409)
+    if r.status_code == 202:
+        assert r.json()["started"] == "linkedin-browser-login"
+
+
+def test_linkedin_browser_login_rejects_when_task_running(client):
+    """POST /api/settings/linkedin-browser-login returns 409 if a task is already running."""
+    tm = client.app.state.task_manager
+    original_prop = type(tm).is_running
+    type(tm).is_running = property(lambda self: True)
+    try:
+        r = client.post("/api/settings/linkedin-browser-login")
+        assert r.status_code == 409
+    finally:
+        type(tm).is_running = original_prop
+
+
+# ---------------------------------------------------------------------------
 # LinkedIn Remote Login endpoints
 # ---------------------------------------------------------------------------
 

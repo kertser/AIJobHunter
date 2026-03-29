@@ -51,10 +51,4 @@ class User(Base):
     notification_email: Mapped[str | None] = mapped_column(String(320), nullable=True, default=None)
     notifications_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
 
-    # ── LinkedIn OAuth (BFF — tokens never exposed to frontend) ──
-    linkedin_access_token: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
-    linkedin_token_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None,
-    )
-    linkedin_member_id: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
 

@@ -111,6 +111,7 @@ async def update_settings_api(body: SettingsUpdate, request: Request, session: S
     if body.notifications_enabled is not None:
         updates["notifications_enabled"] = body.notifications_enabled
 
+
     if user is not None:
         # Write per-user settings to the User row
         from job_hunter.auth.repo import update_user_settings
@@ -127,6 +128,7 @@ async def update_settings_api(body: SettingsUpdate, request: Request, session: S
         from job_hunter.config.loader import save_settings_env
         dotenv_path = getattr(request.app.state, "dotenv_path", None)
         save_settings_env(s, dotenv_path)
+
 
     return {"updated": True}
 
@@ -228,7 +230,44 @@ async def delete_cookies(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# LinkedIn cookie paste (primary method — user copies li_at from browser)
+# LinkedIn browser login (primary — opens a real browser window)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/settings/linkedin-browser-login")
+async def linkedin_browser_login(request: Request):
+    """Open a real browser window for the user to log into LinkedIn.
+
+    Launches a headed Chromium browser with stealth patches.  The user logs
+    in normally (handles 2FA, CAPTCHAs, etc. themselves).  Once the ``li_at``
+    cookie appears, it's saved automatically and the browser closes.
+
+    **Only works when the server runs locally** — the browser window opens
+    on the machine where the server is running.
+    """
+    from job_hunter.web.task_manager import TaskManager
+
+    tm: TaskManager = request.app.state.task_manager
+    if tm.is_running:
+        return JSONResponse({"error": "A task is already running"}, status_code=409)
+
+    from job_hunter.web.deps import get_effective_settings
+    settings = get_effective_settings(request)
+    cookies_path = settings.data_dir / "cookies.json"
+
+    from job_hunter.linkedin.session import LinkedInSession
+    session = LinkedInSession(cookies_path=cookies_path)
+
+    async def _run() -> dict:
+        await session.login(headless=False, timeout_ms=180_000)
+        return {"status": "success"}
+
+    tm.start_task("linkedin-browser-login", _run())
+    return JSONResponse({"started": "linkedin-browser-login"}, status_code=202)
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn cookie paste (fallback — user copies li_at from browser)
 # ---------------------------------------------------------------------------
 
 

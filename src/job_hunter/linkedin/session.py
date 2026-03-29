@@ -107,39 +107,66 @@ class LinkedInSession:
         """
         from playwright.async_api import async_playwright
 
+        logger.info("Launching browser for LinkedIn login…")
+
         async with async_playwright() as pw:
+            _stealth_args = [
+                "--disable-blink-features=AutomationControlled",
+            ]
             try:
                 browser = await pw.chromium.launch(
                     headless=headless, slow_mo=slowmo_ms, channel="chrome",
+                    args=_stealth_args,
                 )
             except Exception:
-                browser = await pw.chromium.launch(headless=headless, slow_mo=slowmo_ms)
+                browser = await pw.chromium.launch(
+                    headless=headless, slow_mo=slowmo_ms, args=_stealth_args,
+                )
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 900},
                 locale="en-US",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
             )
+            await context.add_init_script(_STEALTH_SCRIPT)
             page = await context.new_page()
 
             logger.info("Navigating to LinkedIn login page…")
             await page.goto(LINKEDIN_LOGIN_URL, wait_until="domcontentloaded")
 
-            # Wait for the user to log in — detected by navigation to the feed
-            logger.info("Please log in manually. Waiting up to %ds…", timeout_ms // 1000)
-            try:
-                await page.wait_for_url(
-                    f"{LINKEDIN_BASE}/feed/**",
-                    timeout=timeout_ms,
-                )
-            except Exception:
-                # Also accept other post-login pages
+            # Wait for the user to log in — poll for li_at cookie or feed URL
+            logger.info(
+                "Browser window opened — please log in to LinkedIn. "
+                "Waiting up to %ds…", timeout_ms // 1000,
+            )
+            deadline = asyncio.get_event_loop().time() + timeout_ms / 1000
+            logged_in = False
+            while asyncio.get_event_loop().time() < deadline:
+                # Check for li_at cookie (most reliable signal)
+                cookies = await context.cookies(["https://www.linkedin.com"])
+                for c in cookies:
+                    if c["name"] == "li_at" and c.get("value"):
+                        logged_in = True
+                        break
+                if logged_in:
+                    break
+                # Also check URL (feed = definitely logged in)
+                url = page.url
+                if "/feed" in url or ("/in/" in url and "/login" not in url):
+                    logged_in = True
+                    break
+                await asyncio.sleep(1)
+
+            if not logged_in:
                 current = page.url
-                if "linkedin.com" in current and "/login" not in current:
-                    logger.info("Detected post-login page: %s", current)
-                else:
-                    raise TimeoutError(
-                        f"Login not detected within {timeout_ms // 1000}s. "
-                        f"Current URL: {current}"
-                    )
+                await browser.close()
+                raise TimeoutError(
+                    f"Login not detected within {timeout_ms // 1000}s. "
+                    f"Current URL: {current}"
+                )
 
             logger.info("Login detected! Saving cookies…")
             await self._save_cookies_from_context(context)
@@ -191,6 +218,12 @@ class LinkedInSession:
     ) -> dict[str, str]:
         """Programmatic login for headless / remote-server environments.
 
+        Uses a **persistent browser profile** stored alongside the cookies
+        file so LinkedIn sees a returning visitor with history, localStorage,
+        and cached data rather than a fresh browser every time.  Combined
+        with human-like typing delays and mouse movements this dramatically
+        reduces detection by LinkedIn's bot-protection.
+
         1. Navigates to the login page and fills credentials.
         2. If LinkedIn presents a verification/checkpoint page and
            *get_verification_code* is provided, it awaits the callable
@@ -219,35 +252,57 @@ class LinkedInSession:
             if on_progress:
                 on_progress(msg)
 
-        _progress("Launching headless browser…")
+        _progress("Launching browser…")
 
         async with async_playwright() as pw:
             _stealth_args = [
                 "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-infobars",
             ]
+
+            # ── Persistent profile: LinkedIn sees a returning visitor ──
+            profile_dir = self.cookies_path.parent / "browser_profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+
             try:
-                browser = await pw.chromium.launch(
-                    headless=headless, slow_mo=slowmo_ms, channel="chrome",
+                context = await pw.chromium.launch_persistent_context(
+                    user_data_dir=str(profile_dir),
+                    headless=headless,
+                    slow_mo=slowmo_ms,
+                    channel="chrome",
                     args=_stealth_args,
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    ),
                 )
             except Exception:
-                browser = await pw.chromium.launch(
-                    headless=headless, slow_mo=slowmo_ms, args=_stealth_args,
+                # Fallback: Chromium without channel="chrome"
+                context = await pw.chromium.launch_persistent_context(
+                    user_data_dir=str(profile_dir),
+                    headless=headless,
+                    slow_mo=slowmo_ms,
+                    args=_stealth_args,
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    ),
                 )
 
-            context = await browser.new_context(
-                viewport={"width": 1280, "height": 900},
-                locale="en-US",
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/131.0.0.0 Safari/537.36"
-                ),
-            )
             await context.add_init_script(_STEALTH_SCRIPT)
 
-
-            page = await context.new_page()
+            page = context.pages[0] if context.pages else await context.new_page()
 
             try:
                 result = await self._do_remote_login(
@@ -260,7 +315,7 @@ class LinkedInSession:
                     screenshot_dir=ss_dir,
                 )
             finally:
-                await browser.close()
+                await context.close()
 
         return result
 
@@ -276,13 +331,41 @@ class LinkedInSession:
         get_remote_click: Callable[[], Any] | None,
         screenshot_dir: Path,
     ) -> dict[str, str]:
-        """Core login logic (extracted for readability)."""
+        """Core login logic with human-like interaction patterns."""
+        import random
 
-        progress("Navigating to LinkedIn login page…")
+        async def _human_delay(lo: float = 0.3, hi: float = 1.2) -> None:
+            """Random delay between actions to mimic human pace."""
+            await page.wait_for_timeout(int(random.uniform(lo, hi) * 1000))
+
+        async def _human_type(locator: Any, text: str) -> None:
+            """Type text character-by-character with random inter-key delays."""
+            await locator.first.click()
+            await _human_delay(0.1, 0.3)
+            for ch in text:
+                await locator.first.press_sequentially(ch, delay=random.randint(50, 160))
+                # Occasional longer pause (thinking)
+                if random.random() < 0.06:
+                    await _human_delay(0.2, 0.5)
+
+        # ── Warm-up: visit homepage first so we arrive at login via
+        #    normal navigation, not a cold direct hit ──
+        progress("Navigating to LinkedIn…")
+        await page.goto(LINKEDIN_BASE, wait_until="domcontentloaded")
+        await _human_delay(1.5, 3.0)
+
+        # Check if already logged in from persistent profile
+        if self._is_logged_in(page.url):
+            progress("Already logged in from previous session! Saving cookies…")
+            await self._save_cookies_from_context(context)
+            progress(f"✅ Saved cookies to {self.cookies_path}")
+            return {"status": "success"}
+
+        progress("Navigating to login page…")
         await page.goto(LINKEDIN_LOGIN_URL, wait_until="domcontentloaded")
-        await page.wait_for_timeout(1500)
+        await _human_delay(1.0, 2.0)
 
-        # Fill credentials
+        # Fill credentials with human-like typing
         progress("Entering credentials…")
         email_input = page.locator('input#username, input[name="session_key"]')
         pwd_input = page.locator('input#password, input[name="session_password"]')
@@ -290,13 +373,54 @@ class LinkedInSession:
         if await email_input.count() == 0 or await pwd_input.count() == 0:
             return {"status": "error", "detail": "Login form not found — LinkedIn may have changed its layout."}
 
-        await email_input.first.fill(email)
-        await pwd_input.first.fill(password)
+        # Move mouse naturally to the email field, then type
+        try:
+            box = await email_input.first.bounding_box()
+            if box:
+                await page.mouse.move(
+                    box["x"] + box["width"] * random.uniform(0.2, 0.8),
+                    box["y"] + box["height"] * random.uniform(0.2, 0.8),
+                    steps=random.randint(5, 15),
+                )
+        except Exception:
+            pass
+        await _human_delay(0.2, 0.5)
+        await _human_type(email_input, email)
+
+        await _human_delay(0.3, 0.8)
+
+        # Move to password field and type
+        try:
+            box = await pwd_input.first.bounding_box()
+            if box:
+                await page.mouse.move(
+                    box["x"] + box["width"] * random.uniform(0.2, 0.8),
+                    box["y"] + box["height"] * random.uniform(0.2, 0.8),
+                    steps=random.randint(5, 15),
+                )
+        except Exception:
+            pass
+        await _human_delay(0.2, 0.5)
+        await _human_type(pwd_input, password)
+
+        await _human_delay(0.4, 1.0)
 
         # Click sign-in
         progress("Submitting login form…")
         submit = page.locator('button[type="submit"], button[data-litms-control-urn*="login-submit"]')
         if await submit.count() > 0:
+            # Move mouse to submit button before clicking
+            try:
+                box = await submit.first.bounding_box()
+                if box:
+                    await page.mouse.move(
+                        box["x"] + box["width"] * random.uniform(0.3, 0.7),
+                        box["y"] + box["height"] * random.uniform(0.3, 0.7),
+                        steps=random.randint(8, 20),
+                    )
+            except Exception:
+                pass
+            await _human_delay(0.1, 0.3)
             await submit.first.click()
         else:
             await pwd_input.first.press("Enter")

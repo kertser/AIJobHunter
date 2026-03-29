@@ -50,12 +50,6 @@ def get_user_by_id(session: Session, user_id: uuid.UUID | str) -> User | None:
     ).scalar_one_or_none()
 
 
-def get_user_by_linkedin_id(session: Session, linkedin_member_id: str) -> User | None:
-    """Look up a user by their LinkedIn member ID (OAuth ``sub`` claim)."""
-    return session.execute(
-        select(User).where(User.linkedin_member_id == linkedin_member_id)
-    ).scalar_one_or_none()
-
 
 def authenticate_user(session: Session, email: str, password: str) -> User | None:
     """Return the user if credentials are valid, else None."""
@@ -182,40 +176,5 @@ def get_user_data_dir(base_data_dir: Path, user_id: uuid.UUID | str) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
 
-
-# ---------------------------------------------------------------------------
-# LinkedIn OAuth helpers (BFF — tokens stored server-side)
-# ---------------------------------------------------------------------------
-
-def update_linkedin_token(
-    session: Session,
-    user_id: uuid.UUID,
-    *,
-    access_token: str,
-    expires_at: datetime | None = None,
-    member_id: str | None = None,
-) -> User | None:
-    """Store a LinkedIn OAuth access token on the User row."""
-    user = get_user_by_id(session, user_id)
-    if user is None:
-        return None
-    user.linkedin_access_token = access_token
-    user.linkedin_token_expires_at = expires_at
-    if member_id is not None:
-        user.linkedin_member_id = member_id
-    session.flush()
-    return user
-
-
-def clear_linkedin_token(session: Session, user_id: uuid.UUID) -> User | None:
-    """Remove the stored LinkedIn OAuth token (disconnect)."""
-    user = get_user_by_id(session, user_id)
-    if user is None:
-        return None
-    user.linkedin_access_token = None
-    user.linkedin_token_expires_at = None
-    user.linkedin_member_id = None
-    session.flush()
-    return user
 
 

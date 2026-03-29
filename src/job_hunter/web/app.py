@@ -137,7 +137,6 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     from job_hunter.web.routers import account as account_router
     from job_hunter.web.routers import admin as admin_router
     from job_hunter.web.routers import auth as auth_router
-    from job_hunter.web.routers import linkedin_oauth as linkedin_oauth_router
     from job_hunter.web.routers import dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings as settings_router, schedule
     from job_hunter.market.web.router import router as market_router
 
@@ -156,8 +155,6 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         "/login", "/register", "/api/auth/", "/api/health",
         "/static/", "/favicon.ico",
         "/api/settings/cookies-paste",  # extension sends li_at without auth
-        "/auth/linkedin",               # LinkedIn OAuth initiate + callback
-        "/api/settings/linkedin-status", # login/register check if OAuth is configured
     )
 
     @app.middleware("http")
@@ -214,7 +211,6 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         }
 
     app.include_router(auth_router.router)
-    app.include_router(linkedin_oauth_router.router)
     app.include_router(account_router.router)
     app.include_router(admin_router.router)
     app.include_router(dashboard.router)
