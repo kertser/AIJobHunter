@@ -16,6 +16,29 @@ class LogLevel(str, enum.Enum):
     ERROR = "ERROR"
 
 
+class LLMTaskConfig(BaseModel):
+    """Override defaults for a specific LLM task.
+
+    ``None`` fields inherit the global default from ``AppSettings``.
+    """
+
+    temperature: float | None = None
+    max_tokens: int | None = None
+
+
+# Default per-task presets — intentionally tuned per use-case.
+# Lower temperature for structured extraction; higher for creative/advisory.
+DEFAULT_LLM_TASK_OVERRIDES: dict[str, dict] = {
+    "scoring":           {"temperature": 0.2},
+    "description_clean": {"temperature": 0.1, "max_tokens": 2000},
+    "profile_gen":       {"temperature": 0.3},
+    "market_extract":    {"temperature": 0.0},
+    "title_normalize":   {"temperature": 0.0},
+    "form_fill":         {"temperature": 0.1, "max_tokens": 1000},
+    "resume_review":     {"temperature": 0.4, "max_tokens": 2000},
+}
+
+
 class AppSettings(BaseSettings):
     """Global application settings, populated from env vars and CLI overrides."""
 
@@ -28,7 +51,22 @@ class AppSettings(BaseSettings):
 
     llm_provider: str = "openai"
     openai_api_key: str = ""
+    local_llm_url: str = "http://localhost:8080/v1"
+    local_llm_model: str = ""
     data_dir: Path = Path("data")
+
+    # Global LLM inference defaults
+    llm_temperature: float = 0.2
+    llm_max_tokens: int = 0       # 0 = provider default (no limit sent)
+
+    # Per-task overrides (JSON-serialisable dict of task_name → partial config).
+    # Populated with sensible defaults; users can tweak individual tasks.
+    llm_task_overrides: dict[str, LLMTaskConfig] = Field(
+        default_factory=lambda: {
+            k: LLMTaskConfig(**v)
+            for k, v in DEFAULT_LLM_TASK_OVERRIDES.items()
+        },
+    )
 
     # Runtime flags (set via CLI)
     mock: bool = False

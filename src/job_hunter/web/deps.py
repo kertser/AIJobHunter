@@ -145,7 +145,9 @@ def get_effective_settings(request: Request) -> AppSettings:
 
     # Collect only non-None overrides from the User row
     _OVERLAY_FIELDS = (
-        "openai_api_key", "llm_provider", "email_provider",
+        "openai_api_key", "llm_provider", "local_llm_url", "local_llm_model",
+        "llm_temperature", "llm_max_tokens",
+        "email_provider",
         "resend_api_key", "smtp_host", "smtp_user", "smtp_password",
         "notification_email", "slowmo_ms", "smtp_port",
         "mock", "dry_run", "headless", "smtp_use_tls",

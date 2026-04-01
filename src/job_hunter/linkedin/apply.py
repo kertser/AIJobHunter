@@ -282,6 +282,7 @@ async def apply_to_job(
     cookies_path: str | Path = "data/cookies.json",
     openai_api_key: str = "",
     user_profile: dict[str, Any] | None = None,
+    settings: Any | None = None,
 ) -> dict[str, Any]:
     """Execute the Easy Apply wizard for a single job.
 
@@ -320,7 +321,13 @@ async def apply_to_job(
     if openai_api_key and user_profile:
         try:
             from job_hunter.linkedin.form_filler_llm import LLMFormFiller, build_profile_context
-            llm_filler = LLMFormFiller(api_key=openai_api_key)
+            filler_kwargs: dict[str, Any] = {"api_key": openai_api_key}
+            if settings is not None:
+                from job_hunter.llm_client import get_task_params
+                tp = get_task_params(settings, "form_fill")
+                filler_kwargs["temperature"] = tp.temperature
+                filler_kwargs["max_tokens"] = tp.max_tokens
+            llm_filler = LLMFormFiller(**filler_kwargs)
             profile_context = build_profile_context(user_profile)
             logger.info("LLM form filler initialized (profile: %d chars)", len(profile_context))
         except Exception as exc:

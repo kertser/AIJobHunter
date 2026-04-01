@@ -266,7 +266,13 @@ async def reformat_description(job_hash: str, request: Request, session: Session
         raise HTTPException(400, "OpenAI API key not set — go to Settings")
 
     from job_hunter.matching.description_cleaner import clean_description_llm
-    cleaned = clean_description_llm(job.description_text, api_key)
+    from job_hunter.llm_client import get_task_params
+    tp = get_task_params(eff, "description_clean")
+    cleaned = clean_description_llm(
+        job.description_text, api_key,
+        temperature=tp.temperature,
+        max_tokens=tp.max_tokens,
+    )
     job.description_text = cleaned
     session.flush()
     return {"hash": job.hash, "description_length": len(cleaned)}

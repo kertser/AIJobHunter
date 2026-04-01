@@ -34,6 +34,9 @@ def _load_run_params(settings, *, data_dir: Path | None = None) -> dict:
         "slowmo_ms": settings.slowmo_ms,
         "data_dir": dd,
         "openai_api_key": settings.openai_api_key,
+        "llm_provider": settings.llm_provider,
+        "local_llm_url": settings.local_llm_url,
+        "local_llm_model": settings.local_llm_model,
         "cookies_path": str(settings.data_dir / "cookies.json"),
     }
 
@@ -208,15 +211,40 @@ async def run_score(request: Request):
             if params["mock"]:
                 embedder = FakeEmbedder(fixed_similarity=0.5)
                 evaluator = FakeLLMEvaluator(fit_score=80, decision="apply")
+            elif params.get("llm_provider") == "local":
+                # Local LLM: use OpenAI embedder if key available, else fake
+                api_key = params["openai_api_key"]
+                if api_key:
+                    embedder = OpenAIEmbedder(api_key=api_key)
+                else:
+                    embedder = FakeEmbedder(fixed_similarity=0.5)
+                local_url = params.get("local_llm_url", "http://localhost:8080/v1")
+                local_model = params.get("local_llm_model", "") or "local"
+                from job_hunter.llm_client import get_task_params
+                tp = get_task_params(settings, "scoring")
+                evaluator = OpenAILLMEvaluator(
+                    api_key="local-no-key-needed",
+                    model=local_model,
+                    base_url=local_url,
+                    temperature=tp.temperature,
+                    max_tokens=tp.max_tokens,
+                )
             else:
                 api_key = params["openai_api_key"]
                 if not api_key:
                     raise ValueError(
                         "OpenAI API key not set. Go to Settings and enter your key, "
-                        "or set JOBHUNTER_OPENAI_API_KEY environment variable."
+                        "set JOBHUNTER_OPENAI_API_KEY environment variable, "
+                        "or switch LLM Provider to 'local'."
                     )
                 embedder = OpenAIEmbedder(api_key=api_key)
-                evaluator = OpenAILLMEvaluator(api_key=api_key)
+                from job_hunter.llm_client import get_task_params
+                tp = get_task_params(settings, "scoring")
+                evaluator = OpenAILLMEvaluator(
+                    api_key=api_key,
+                    temperature=tp.temperature,
+                    max_tokens=tp.max_tokens,
+                )
 
             # Find all jobs that don't have a Score record yet (scoped to user)
             from sqlalchemy import select
@@ -397,7 +425,7 @@ async def run_pipeline_endpoint(request: Request):
 
     async def _run():
         try:
-            return await run_pipeline(**params, captcha_handler=_captcha_handler)
+            return await run_pipeline(**params, captcha_handler=_captcha_handler, settings=settings)
         finally:
             request.app.state._discovery_click_queue = None
 
@@ -430,13 +458,44 @@ async def run_market(request: Request):
         OpenAITitleNormalizer,
     )
 
-    # Choose extractor based on mock mode
+    # Choose extractor based on mock mode and LLM provider
     if settings.mock:
         extractor = FakeMarketExtractor()
         title_norm = FakeTitleNormalizer()
+    elif settings.llm_provider == "local":
+        local_url = settings.local_llm_url or "http://localhost:8080/v1"
+        local_model = settings.local_llm_model or "local"
+        from job_hunter.llm_client import get_task_params
+        ext_tp = get_task_params(settings, "market_extract")
+        title_tp = get_task_params(settings, "title_normalize")
+        extractor = OpenAIMarketExtractor(
+            api_key="local-no-key-needed",
+            model=local_model,
+            base_url=local_url,
+            temperature=ext_tp.temperature,
+            max_tokens=ext_tp.max_tokens,
+        )
+        title_norm = OpenAITitleNormalizer(
+            api_key="local-no-key-needed",
+            model=local_model,
+            base_url=local_url,
+            temperature=title_tp.temperature,
+            max_tokens=title_tp.max_tokens,
+        )
     elif settings.openai_api_key:
-        extractor = OpenAIMarketExtractor(api_key=settings.openai_api_key)
-        title_norm = OpenAITitleNormalizer(api_key=settings.openai_api_key)
+        from job_hunter.llm_client import get_task_params
+        ext_tp = get_task_params(settings, "market_extract")
+        title_tp = get_task_params(settings, "title_normalize")
+        extractor = OpenAIMarketExtractor(
+            api_key=settings.openai_api_key,
+            temperature=ext_tp.temperature,
+            max_tokens=ext_tp.max_tokens,
+        )
+        title_norm = OpenAITitleNormalizer(
+            api_key=settings.openai_api_key,
+            temperature=title_tp.temperature,
+            max_tokens=title_tp.max_tokens,
+        )
     else:
         extractor = HeuristicExtractor()
         title_norm = HeuristicTitleNormalizer()

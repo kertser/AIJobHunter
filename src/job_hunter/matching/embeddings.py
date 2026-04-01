@@ -33,14 +33,25 @@ class Embedder:
 class OpenAIEmbedder(Embedder):
     """Generate embeddings via the OpenAI Embeddings API."""
 
-    def __init__(self, api_key: str, model: str = "text-embedding-3-small") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "text-embedding-3-small",
+        *,
+        base_url: str | None = None,
+    ) -> None:
         self.api_key = api_key
         self.model = model
+        self.base_url = base_url
 
     def embed(self, text: str) -> list[float]:
         from openai import OpenAI
 
-        client = OpenAI(api_key=self.api_key)
+        kwargs: dict = {"api_key": self.api_key}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+
+        client = OpenAI(**kwargs)
 
         # Truncate very long texts to stay within token limits
         truncated = text[:8000]

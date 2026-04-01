@@ -56,9 +56,20 @@ Return ONLY valid JSON. No markdown, no commentary.
 class LLMFormFiller:
     """Answers application form questions using an LLM and user profile data."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4o-mini",
+        *,
+        base_url: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> None:
         self.api_key = api_key
         self.model = model
+        self.base_url = base_url
+        self.temperature = temperature
+        self.max_tokens = max_tokens
         self._cache: dict[str, str] = {}  # label → answer cache
 
     def answer_fields(
@@ -107,19 +118,29 @@ class LLMFormFiller:
 
         try:
             from openai import OpenAI
-            client = OpenAI(api_key=self.api_key)
+            from job_hunter.llm_client import safe_json_parse
+
+            client_kwargs: dict = {"api_key": self.api_key}
+            if self.base_url:
+                client_kwargs["base_url"] = self.base_url
+
+            client = OpenAI(**client_kwargs)
 
             logger.info("Asking LLM to fill %d form fields via %s", len(uncached_fields), self.model)
-            response = client.chat.completions.create(
-                model=self.model,
-                response_format={"type": "json_object"},
-                messages=[
+
+            create_kwargs: dict = {
+                "model": self.model,
+                "messages": [
                     {"role": "system", "content": FORM_FILLER_SYSTEM_PROMPT},
                     {"role": "user", "content": user_message},
                 ],
-                temperature=0.1,
-                max_tokens=1000,
-            )
+                "temperature": self.temperature if self.temperature is not None else 0.1,
+                "max_tokens": self.max_tokens if self.max_tokens else 1000,
+            }
+            if not self.base_url:
+                create_kwargs["response_format"] = {"type": "json_object"}
+
+            response = client.chat.completions.create(**create_kwargs)
 
             raw = response.choices[0].message.content
             if not raw:
@@ -127,7 +148,7 @@ class LLMFormFiller:
                 return cached_answers
 
             logger.debug("LLM form filler response:\n%s", raw)
-            answers: dict[str, str] = json.loads(raw)
+            answers: dict[str, str] = safe_json_parse(raw)
 
             # Ensure all values are strings
             for k, v in answers.items():

@@ -71,6 +71,10 @@ def load_settings(**cli_overrides: Any) -> AppSettings:
 _PERSISTED_FIELDS: dict[str, str] = {
     "openai_api_key": "JOBHUNTER_OPENAI_API_KEY",
     "llm_provider": "JOBHUNTER_LLM_PROVIDER",
+    "local_llm_url": "JOBHUNTER_LOCAL_LLM_URL",
+    "local_llm_model": "JOBHUNTER_LOCAL_LLM_MODEL",
+    "llm_temperature": "JOBHUNTER_LLM_TEMPERATURE",
+    "llm_max_tokens": "JOBHUNTER_LLM_MAX_TOKENS",
     "mock": "JOBHUNTER_MOCK",
     "dry_run": "JOBHUNTER_DRY_RUN",
     "headless": "JOBHUNTER_HEADLESS",

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -71,14 +70,30 @@ class LLMEvaluator:
 class OpenAILLMEvaluator(LLMEvaluator):
     """Evaluate job fit using the OpenAI Chat Completions API."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4o-mini",
+        *,
+        base_url: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> None:
         self.api_key = api_key
         self.model = model
+        self.base_url = base_url
+        self.temperature = temperature
+        self.max_tokens = max_tokens
 
     def evaluate(self, resume: str, job_description: str, user_preferences: dict[str, Any] | None = None) -> dict[str, Any]:
         from openai import OpenAI
+        from job_hunter.llm_client import safe_json_parse
 
-        client = OpenAI(api_key=self.api_key)
+        kwargs: dict = {"api_key": self.api_key}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+
+        client = OpenAI(**kwargs)
 
         user_message = (
             f"=== RESUME ===\n{resume[:4000]}\n\n"
@@ -96,22 +111,29 @@ class OpenAILLMEvaluator(LLMEvaluator):
                 user_message += f"\n\n=== CANDIDATE PREFERENCES ===\n" + "\n".join(pref_lines)
 
         logger.info("Requesting LLM job evaluation via %s", self.model)
-        response = client.chat.completions.create(
-            model=self.model,
-            response_format={"type": "json_object"},
-            messages=[
+
+        # Local models may not support response_format=json_object reliably
+        create_kwargs: dict = {
+            "model": self.model,
+            "messages": [
                 {"role": "system", "content": EVAL_SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
             ],
-            temperature=0.2,
-        )
+            "temperature": self.temperature if self.temperature is not None else 0.2,
+        }
+        if self.max_tokens:
+            create_kwargs["max_tokens"] = self.max_tokens
+        if not self.base_url:
+            create_kwargs["response_format"] = {"type": "json_object"}
+
+        response = client.chat.completions.create(**create_kwargs)
 
         raw = response.choices[0].message.content
         if raw is None:
-            raise RuntimeError("OpenAI returned an empty response")
+            raise RuntimeError("LLM returned an empty response")
 
         logger.debug("Raw LLM eval response:\n%s", raw)
-        data: dict[str, Any] = json.loads(raw)
+        data: dict[str, Any] = safe_json_parse(raw)
 
         # Validate and normalise
         data.setdefault("fit_score", 0)

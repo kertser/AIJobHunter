@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from job_hunter.db.models import Base
@@ -35,6 +35,10 @@ class User(Base):
     # overrides the global default for this user.
     openai_api_key: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True, default=None)
+    local_llm_url: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
+    local_llm_model: Mapped[str | None] = mapped_column(String(200), nullable=True, default=None)
+    llm_temperature: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    llm_max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     mock: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
     dry_run: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
     headless: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)

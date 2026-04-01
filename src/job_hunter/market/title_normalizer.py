@@ -230,10 +230,22 @@ class OpenAITitleNormalizer(TitleNormalizer):
 
     version: str = "openai-title-1.0"
 
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini", batch_size: int = 50) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4o-mini",
+        batch_size: int = 50,
+        *,
+        base_url: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.batch_size = batch_size
+        self.base_url = base_url
+        self.temperature = temperature
+        self.max_tokens = max_tokens
         self._cache: dict[str, str] = {}
 
     def normalize(self, title: str, *, company: str = "") -> str:
@@ -248,9 +260,8 @@ class OpenAITitleNormalizer(TitleNormalizer):
         *,
         companies: list[str] | None = None,
     ) -> dict[str, str]:
-        import json
-
         from openai import OpenAI
+        from job_hunter.llm_client import safe_json_parse
 
         companies = companies or [""] * len(titles)
         result: dict[str, str] = {}
@@ -268,7 +279,11 @@ class OpenAITitleNormalizer(TitleNormalizer):
         if not uncached_titles:
             return result
 
-        client = OpenAI(api_key=self.api_key)
+        kwargs: dict = {"api_key": self.api_key}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+
+        client = OpenAI(**kwargs)
 
         # Process in batches
         for batch_start in range(0, len(uncached_titles), self.batch_size):
@@ -306,13 +321,10 @@ class OpenAITitleNormalizer(TitleNormalizer):
                         {"role": "system", "content": system},
                         {"role": "user", "content": user},
                     ],
-                    temperature=0.0,
+                    temperature=self.temperature if self.temperature is not None else 0.0,
                 )
                 raw = resp.choices[0].message.content or "{}"
-                raw = raw.strip()
-                if raw.startswith("```"):
-                    raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
-                mapping = json.loads(raw)
+                mapping = safe_json_parse(raw)
 
                 for t in batch_titles:
                     canonical = mapping.get(t, t).lower().strip()

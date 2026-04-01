@@ -548,7 +548,11 @@ uv run hunt --real --dry-run serve
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `JOBHUNTER_OPENAI_API_KEY` | For real use | `""` | OpenAI API key |
-| `JOBHUNTER_LLM_PROVIDER` | No | `"openai"` | LLM provider |
+| `JOBHUNTER_LLM_PROVIDER` | No | `"openai"` | LLM provider: `openai` or `local` |
+| `JOBHUNTER_LOCAL_LLM_URL` | For local | `"http://localhost:8080/v1"` | Local LLM server URL |
+| `JOBHUNTER_LOCAL_LLM_MODEL` | No | `""` | Local model name (blank = auto-detect) |
+| `JOBHUNTER_LLM_TEMPERATURE` | No | `0.2` | Global default temperature for LLM calls |
+| `JOBHUNTER_LLM_MAX_TOKENS` | No | `0` | Global default max tokens (0 = no limit) |
 | `JOBHUNTER_DATA_DIR` | No | `"data"` | Path to the data directory |
 | `JOBHUNTER_SECRET_KEY` | No | auto-generated | JWT signing key (auto-persisted on first run) |
 | `JOBHUNTER_ADMIN_PASSWORD` | No | `""` | Admin panel password (empty = no gate) |
@@ -728,13 +732,18 @@ Configurable via `--data-dir` or `JOBHUNTER_DATA_DIR`.
 AIJobHunter/
 ├── pyproject.toml                        # Dependencies & build config (hatchling)
 ├── Dockerfile                            # Multi-stage Docker build
+├── Dockerfile.llm                        # Local LLM sidecar image
 ├── docker-compose.yml                    # One-command container deployment
 ├── README.md
 ├── AGENTS.md                             # Detailed architecture & conventions
 ├── .env.example                          # Environment config template
 │
+├── config/
+│   └── llm_server.json                   # LLM sidecar server params (n_ctx, threads, etc.)
+│
 ├── src/job_hunter/
 │   ├── cli.py                            # Typer CLI — all commands + market sub-app
+│   ├── llm_client.py                     # Central LLM client factory + task param resolution
 │   │
 │   ├── auth/
 │   │   ├── models.py                     # User ORM — credentials, per-user settings
@@ -947,6 +956,76 @@ The container:
 - Runs a health check every 30 s at `/api/health`
 - Restarts automatically (`unless-stopped`)
 
+### Local LLM Sidecar
+
+An optional self-hosted LLM container provides an OpenAI-compatible API, so the system can run fully offline without an OpenAI API key. Uses [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) with GGUF models.
+
+**Quick start:**
+
+```bash
+# 1. Download a model (~1.8 GB default)
+.\scripts\download_model.ps1          # Windows
+./scripts/download_model.sh           # Linux/macOS
+
+# 2. Start the sidecar
+docker compose --profile local-llm up llm -d
+
+# 3. Verify it's running
+curl http://localhost:8080/v1/models
+```
+
+Then set **LLM Provider → Local LLM** in the web Settings page, or:
+
+```bash
+JOBHUNTER_LLM_PROVIDER=local
+JOBHUNTER_LOCAL_LLM_URL=http://localhost:8080/v1
+```
+
+**Server configuration** is in `config/llm_server.json` (mounted into the container):
+
+```json
+{
+  "model": "/models/model.gguf",
+  "n_ctx": 4096,
+  "n_batch": 512,
+  "n_threads": 4,
+  "n_threads_batch": 8,
+  "use_mlock": true,
+  "cache": true,
+  "host": "0.0.0.0",
+  "port": 8080
+}
+```
+
+Edit this file to tune context size, thread count, caching, etc. Changes take effect on container restart.
+
+**Recommended models:**
+
+| Model | Size | Quality |
+|---|---|---|
+| Llama-3.2-1B-Instruct-Q4_K_S | ~700 MB | Basic (fast) |
+| Llama-3.2-3B-Instruct-Q4_K_M | ~1.8 GB | Good (default) |
+| Phi-3.5-mini-Q4_K_M | ~2.2 GB | Good (128K context) |
+| Mistral-7B-Instruct-Q4_K_M | ~4.4 GB | Great (slow) |
+
+> **Note:** For reliable JSON output (scoring, profiles), 3B+ models are recommended. Embeddings still use OpenAI when an API key is set; without a key, similarity defaults to a fixed value.
+
+### LLM Inference Parameters
+
+All LLM calls use centralized temperature and max-token settings from `AppSettings`. Per-task presets are pre-configured with optimal values:
+
+| Task | Temperature | Max Tokens | Used By |
+|---|---|---|---|
+| `scoring` | 0.2 | — | Job fit evaluation |
+| `description_clean` | 0.1 | 2000 | Job description formatting |
+| `profile_gen` | 0.3 | — | Profile generation |
+| `market_extract` | 0.0 | — | Market signal extraction |
+| `title_normalize` | 0.0 | — | Job title normalization |
+| `form_fill` | 0.1 | 1000 | Easy Apply form filling |
+| `resume_review` | 0.4 | 2000 | Resume gap analysis |
+
+Global defaults (temperature, max tokens) are configurable from the **Settings** page or via environment variables. Per-task overrides automatically apply on top of the global defaults.
+
 
 ---
 
@@ -981,6 +1060,7 @@ The container:
 | **15** | Operational integration — pipeline, SSE, title normalisation | ✅ |
 | **16** | Scheduled pipelines, email notifications (Resend + SMTP), Docker | ✅ |
 | **17** | Multi-user authentication, account management, admin panel | ✅ |
+| **18** | Centralized LLM configuration — server config file, per-task params, GUI controls | ✅ |
 | **Next** | Outcome learning, career trajectory parsing, fairness-aware reranking | 🔜 |
 
 ---

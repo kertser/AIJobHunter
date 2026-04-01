@@ -133,7 +133,14 @@ Output ONLY the Markdown-formatted job description.
 """
 
 
-def clean_description_llm(raw: str, api_key: str, model: str = "gpt-4o-mini") -> str:
+def clean_description_llm(
+    raw: str,
+    api_key: str,
+    model: str = "gpt-4o-mini",
+    *,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> str:
     """Use an LLM to clean and format a raw job description into Markdown.
 
     Falls back to rule-based cleaning if the LLM call fails.
@@ -161,8 +168,8 @@ def clean_description_llm(raw: str, api_key: str, model: str = "gpt-4o-mini") ->
                 {"role": "system", "content": _FORMAT_SYSTEM_PROMPT},
                 {"role": "user", "content": pre_cleaned[:6000]},
             ],
-            temperature=0.1,
-            max_tokens=2000,
+            temperature=temperature if temperature is not None else 0.1,
+            max_tokens=max_tokens if max_tokens else 2000,
         )
         result = response.choices[0].message.content or ""
         if len(result) > 50:

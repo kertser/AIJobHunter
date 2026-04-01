@@ -42,6 +42,9 @@ async def run_pipeline(
     slowmo_ms: int = 0,
     data_dir: Path = Path("data"),
     openai_api_key: str = "",
+    llm_provider: str = "openai",
+    local_llm_url: str = "",
+    local_llm_model: str = "",
     min_fit_score: int = 75,
     min_similarity: float = 0.35,
     max_applications_per_day: int = 25,
@@ -56,6 +59,7 @@ async def run_pipeline(
     remote: bool = False,
     seniority: list[str] | None = None,
     captcha_handler: Any | None = None,
+    settings: Any | None = None,
 ) -> dict[str, Any]:
     """Execute the full pipeline for a given search profile.
 
@@ -112,9 +116,32 @@ async def run_pipeline(
     if mock:
         embedder = FakeEmbedder(fixed_similarity=0.5)
         evaluator = FakeLLMEvaluator(fit_score=80, decision="apply")
+    elif llm_provider == "local":
+        # Local LLM: use FakeEmbedder (local models have poor embeddings)
+        # but real LLM evaluator pointed at the local server
+        if openai_api_key:
+            embedder = OpenAIEmbedder(api_key=openai_api_key)
+        else:
+            embedder = FakeEmbedder(fixed_similarity=0.5)
+        _scoring_kwargs: dict[str, Any] = {}
+        if settings is not None:
+            from job_hunter.llm_client import get_task_params
+            tp = get_task_params(settings, "scoring")
+            _scoring_kwargs = {"temperature": tp.temperature, "max_tokens": tp.max_tokens}
+        evaluator = OpenAILLMEvaluator(
+            api_key="local-no-key-needed",
+            model=local_llm_model or "local",
+            base_url=local_llm_url or "http://localhost:8080/v1",
+            **_scoring_kwargs,
+        )
     else:
         embedder = OpenAIEmbedder(api_key=openai_api_key)
-        evaluator = OpenAILLMEvaluator(api_key=openai_api_key)
+        _scoring_kwargs = {}
+        if settings is not None:
+            from job_hunter.llm_client import get_task_params
+            tp = get_task_params(settings, "scoring")
+            _scoring_kwargs = {"temperature": tp.temperature, "max_tokens": tp.max_tokens}
+        evaluator = OpenAILLMEvaluator(api_key=openai_api_key, **_scoring_kwargs)
 
     new_jobs = get_jobs_by_status(session, JobStatus.NEW)
     total_to_score = len(new_jobs)
