@@ -14,7 +14,7 @@ services:
       - JOBHUNTER_DATA_DIR=/app/data
       - JOBHUNTER_HEADLESS=true
       # Point to the LLM sidecar (used when llm_provider=local)
-      - JOBHUNTER_LOCAL_LLM_URL=http://llm:8080/v1
+      - JOBHUNTER_LOCAL_LLM_URL=http://llm:8000/v1
       # Container name for Docker management from web UI
       - LLM_CONTAINER_NAME=ai-job-hunter-llm
     depends_on:
@@ -39,17 +39,20 @@ services:
     container_name: ai-job-hunter-llm
     volumes:
       - ./models:/models
-      - ./config/llm_server.json:/app/config/llm_server.json:ro
     ports:
-      - "8080:8080"
-    # IPC_LOCK needed for use_mlock in llm_server.json (pins model in RAM)
+      - "8080:8000"            # external 8080 → container 8000 (llama-cpp default)
+    # IPC_LOCK allows use_mlock (model pinned in RAM) if enabled via CLI
     cap_add:
       - IPC_LOCK
-    # Shared memory for large model inference
     shm_size: "512m"
+    # Override model settings via environment (defaults in Dockerfile.llm)
+    # environment:
+    #   - MODEL=/models/model.gguf
+    #   - N_CTX=4096
+    #   - N_THREADS=4
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/models"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/v1/models"]
       interval: 30s
       timeout: 10s
       retries: 5
