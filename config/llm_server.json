@@ -1,25 +1,18 @@
 {
-  "_comment": "llama-cpp-python server configuration. Mounted into the Docker sidecar at /app/config/llm_server.json. All parameters here map to CLI flags of `python -m llama_cpp.server`.",
-
-  "model": "/models/model.gguf",
-  "model_alias": "local",
-
-  "n_ctx": 4096,
-  "n_batch": 512,
-  "n_threads": 4,
-  "n_threads_batch": 8,
-
-  "use_mmap": true,
-  "use_mlock": true,
-  "flash_attn": false,
-  "cache": true,
-  "cache_type": "ram",
-  "cache_size": 2147483648,
-
-  "embedding": false,
-  "verbose": true,
-
-  "host": "0.0.0.0",
-  "port": 8080
+  "models": [
+    {
+      "model": "/models/model.gguf",
+      "model_alias": "local",
+      "n_ctx": 4096,
+      "n_batch": 512,
+      "n_threads": 4,
+      "n_threads_batch": 8,
+      "use_mmap": true,
+      "use_mlock": true,
+      "flash_attn": false,
+      "embedding": false,
+      "verbose": true
+    }
+  ]
 }
 
