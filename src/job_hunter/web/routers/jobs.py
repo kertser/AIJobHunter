@@ -316,6 +316,8 @@ async def remove_job(job_hash: str, request: Request, session: Session = Depends
 @router.post("/api/jobs/{job_hash}/reformat")
 async def reformat_description(job_hash: str, request: Request, session: Session = Depends(get_db)):
     """Re-format a job description using LLM for clean Markdown output."""
+    import asyncio
+
     user_id = _get_user_id(request)
     query = select(Job).where(Job.hash == job_hash)
     if user_id is not None:
@@ -337,8 +339,12 @@ async def reformat_description(job_hash: str, request: Request, session: Session
         raise HTTPException(400, "No LLM available — set an OpenAI API key or switch to a local LLM in Settings")
 
     tp = get_task_params(eff, "description_clean")
-    cleaned = clean_description_llm(
-        job.description_text, api_key or "",
+    raw_text = job.description_text
+
+    # Run the LLM call in a thread so it doesn't block the event loop
+    cleaned = await asyncio.to_thread(
+        clean_description_llm,
+        raw_text, api_key or "",
         temperature=tp.temperature,
         max_tokens=tp.max_tokens,
         settings=eff,

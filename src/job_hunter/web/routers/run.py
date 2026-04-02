@@ -584,22 +584,27 @@ async def run_market(request: Request):
 @router.post("/api/run/report")
 async def run_report(request: Request):
     """Generate a daily report (fast, no SSE needed)."""
+    import asyncio
+
     engine = request.app.state.engine
     data_dir = get_user_data_dir(request)
 
     from job_hunter.db.repo import make_session
     from job_hunter.reporting.report import generate_report
 
-    session = make_session(engine)
-    try:
-        summary = generate_report(session=session, data_dir=data_dir)
-        return JSONResponse({
-            "date": summary.get("date"),
-            "md_path": str(summary.get("md_path", "")),
-            "json_path": str(summary.get("json_path", "")),
-        })
-    finally:
-        session.close()
+    def _gen():
+        session = make_session(engine)
+        try:
+            return generate_report(session=session, data_dir=data_dir)
+        finally:
+            session.close()
+
+    summary = await asyncio.to_thread(_gen)
+    return JSONResponse({
+        "date": summary.get("date"),
+        "md_path": str(summary.get("md_path", "")),
+        "json_path": str(summary.get("json_path", "")),
+    })
 
 
 class CaptchaClickRequest(BaseModel):
