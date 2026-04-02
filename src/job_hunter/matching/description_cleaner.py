@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 logger = logging.getLogger("job_hunter.matching.description_cleaner")
 
@@ -135,21 +136,35 @@ Output ONLY the Markdown-formatted job description.
 
 def clean_description_llm(
     raw: str,
-    api_key: str,
+    api_key: str = "",
     model: str = "gpt-4o-mini",
     *,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    settings: Any | None = None,
 ) -> str:
     """Use an LLM to clean and format a raw job description into Markdown.
+
+    When *settings* is provided the client is built via
+    :func:`~job_hunter.llm_client.build_llm_client` so that
+    ``llm_provider="local"`` is respected.  Otherwise falls back to the
+    legacy ``api_key``-only path (direct OpenAI call).
 
     Falls back to rule-based cleaning if the LLM call fails.
     """
     if not raw or len(raw) < 50:
         return raw
 
-    if not api_key:
-        logger.debug("No API key — falling back to rule-based cleaning")
+    # Determine whether we can make an LLM call at all
+    has_settings = settings is not None
+    if has_settings:
+        from job_hunter.llm_client import is_local_provider
+        can_call = is_local_provider(settings) or bool(settings.openai_api_key)
+    else:
+        can_call = bool(api_key)
+
+    if not can_call:
+        logger.debug("No LLM available — falling back to rule-based cleaning")
         return clean_description_rules(raw)
 
     # First apply rule-based cleaning to reduce token usage
@@ -158,12 +173,17 @@ def clean_description_llm(
         pre_cleaned = raw[:8000]
 
     try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=api_key)
+        if has_settings:
+            from job_hunter.llm_client import build_llm_client, get_chat_model
+            client = build_llm_client(settings)
+            effective_model = get_chat_model(settings)
+        else:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            effective_model = model
 
         response = client.chat.completions.create(
-            model=model,
+            model=effective_model,
             messages=[
                 {"role": "system", "content": _FORMAT_SYSTEM_PROMPT},
                 {"role": "user", "content": pre_cleaned[:6000]},
