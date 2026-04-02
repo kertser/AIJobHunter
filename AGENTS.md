@@ -203,5 +203,5 @@ $env:JOBHUNTER_LLM_PROVIDER = "local"
 $env:JOBHUNTER_LOCAL_LLM_URL = "http://localhost:8080/v1"
 ```
 
-Files: `Dockerfile.llm` (sidecar image), `models/` (bind-mounted GGUF files, gitignored), `scripts/download_model.{sh,ps1}` (model download helpers). Embeddings still use OpenAI when an API key is set (local models produce poor embeddings); without a key, similarity defaults to a fixed value.
+Files: `Dockerfile.llm` (sidecar image), `models/` (bind-mounted GGUF files, gitignored), `scripts/download_model.{sh,ps1}` (model download helpers). When `llm_provider=local`, ALL LLM calls go to the local sidecar — no OpenAI API calls are made. Embeddings use `FakeEmbedder` (fixed similarity 0.5) in local mode because small models produce poor embeddings; similarity is cosmetic, the local LLM evaluator drives the actual apply/skip/review decision.
 

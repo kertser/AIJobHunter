@@ -118,12 +118,10 @@ async def run_pipeline(
         embedder = FakeEmbedder(fixed_similarity=0.5)
         evaluator = FakeLLMEvaluator(fit_score=80, decision="apply")
     elif llm_provider == "local":
-        # Local LLM: use FakeEmbedder (local models have poor embeddings)
-        # but real LLM evaluator pointed at the local server
-        if openai_api_key:
-            embedder = OpenAIEmbedder(api_key=openai_api_key)
-        else:
-            embedder = FakeEmbedder(fixed_similarity=0.5)
+        # Local LLM mode: no OpenAI calls at all.
+        # Use FakeEmbedder (local models produce poor embeddings)
+        # and point the LLM evaluator at the local sidecar.
+        embedder = FakeEmbedder(fixed_similarity=0.5)
         _scoring_kwargs: dict[str, Any] = {}
         if settings is not None:
             from job_hunter.llm_client import get_task_params
@@ -147,6 +145,7 @@ async def run_pipeline(
     new_jobs = get_jobs_by_status(session, JobStatus.NEW)
     total_to_score = len(new_jobs)
     logger.info("Found %d new job(s) to score", total_to_score)
+    consecutive_errors = 0
     for idx, job in enumerate(new_jobs, 1):
         # Blacklist check
         if is_blacklisted(
@@ -165,14 +164,31 @@ async def run_pipeline(
 
         # Run compute_score in a thread so the event loop stays free
         # for SSE progress delivery between jobs.
-        result = await asyncio.to_thread(
-            compute_score,
-            resume_text=resume_text,
-            job_description=job.description_text,
-            embedder=embedder,
-            llm_evaluator=evaluator,
-            user_preferences=user_preferences,
-        )
+        try:
+            result = await asyncio.to_thread(
+                compute_score,
+                resume_text=resume_text,
+                job_description=job.description_text,
+                embedder=embedder,
+                llm_evaluator=evaluator,
+                user_preferences=user_preferences,
+            )
+        except Exception as exc:
+            exc_str = str(exc)
+            if "429" in exc_str or "quota" in exc_str.lower() or "rate" in exc_str.lower():
+                logger.error(
+                    "❌ API quota/rate-limit error — aborting scoring. "
+                    "Switch to a local LLM in Settings or check your API plan. Error: %s",
+                    exc,
+                )
+                break
+            consecutive_errors += 1
+            logger.error("❌ score failed for %s: %s", job.title, exc)
+            if consecutive_errors >= 3:
+                logger.error("Too many consecutive errors (%d) — aborting scoring", consecutive_errors)
+                break
+            continue
+        consecutive_errors = 0
 
         score_row = Score(
             job_hash=job.hash,
@@ -246,6 +262,8 @@ async def run_pipeline(
                 slowmo_ms=slowmo_ms,
                 mock=mock,
                 cookies_path=str(data_dir / "cookies.json"),
+                openai_api_key=openai_api_key,
+                settings=settings,
             )
 
             result_map = {

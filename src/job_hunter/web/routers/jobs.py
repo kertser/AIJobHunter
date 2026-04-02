@@ -379,6 +379,7 @@ async def apply_single_job(job_hash: str, request: Request, session: Session = D
                 form_answers=profile_form_answers,
                 openai_api_key=api_key,
                 user_profile=user_profile_dict,
+                settings=eff,
             )
             sess = make_session(engine)
             result_map = {"success": ApplicationResult.SUCCESS, "dry_run": ApplicationResult.DRY_RUN,
