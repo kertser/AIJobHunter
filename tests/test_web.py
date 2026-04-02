@@ -275,6 +275,35 @@ class TestSettings:
         assert data["mock"] is False
         assert data["slowmo_ms"] == 500
 
+    def test_llm_container_status_returns_json(self, client: TestClient) -> None:
+        """LLM container status endpoint returns structured JSON."""
+        r = client.get("/api/settings/llm-container")
+        assert r.status_code == 200
+        data = r.json()
+        # Must have the expected keys (Docker likely unavailable in tests)
+        assert "available" in data
+        assert "state" in data
+        assert "health" in data
+
+    def test_llm_container_start_without_docker(self, client: TestClient) -> None:
+        """Start endpoint handles missing Docker gracefully."""
+        r = client.post("/api/settings/llm-container/start")
+        # Either succeeds (Docker available) or returns 500 with error
+        data = r.json()
+        assert "ok" in data or "error" in data
+
+    def test_llm_container_stop_without_docker(self, client: TestClient) -> None:
+        """Stop endpoint handles missing Docker gracefully."""
+        r = client.post("/api/settings/llm-container/stop")
+        data = r.json()
+        assert "ok" in data or "error" in data
+
+    def test_llm_container_restart_without_docker(self, client: TestClient) -> None:
+        """Restart endpoint handles missing Docker gracefully."""
+        r = client.post("/api/settings/llm-container/restart")
+        data = r.json()
+        assert "ok" in data or "error" in data
+
 
 # ---------------------------------------------------------------------------
 # Run controls

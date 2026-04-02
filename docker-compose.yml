@@ -6,6 +6,8 @@ services:
       - "80:8000"
     volumes:
       - ./data:/app/data
+      # Docker socket for LLM container management from the web UI
+      - /var/run/docker.sock:/var/run/docker.sock
     env_file:
       - .env
     environment:
@@ -13,10 +15,12 @@ services:
       - JOBHUNTER_HEADLESS=true
       # Point to the LLM sidecar (used when llm_provider=local)
       - JOBHUNTER_LOCAL_LLM_URL=http://llm:8080/v1
+      # Container name for Docker management from web UI
+      - LLM_CONTAINER_NAME=ai-job-hunter-llm
     depends_on:
       llm:
         condition: service_started
-        required: false          # app still works without the LLM sidecar
+        required: false          # app starts even if LLM is slow to load model
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
@@ -26,8 +30,8 @@ services:
       start_period: 15s
 
   # ── Local LLM sidecar (OpenAI-compatible API) ───────────────────
-  # Download a model first:  ./scripts/download_model.sh
-  # Then:  docker compose up llm
+  # Always started on deployment.  Model auto-downloaded by deploy.sh.
+  # Manage from the web UI: Settings → LLM Provider → Container Control.
   llm:
     build:
       context: .
@@ -39,8 +43,6 @@ services:
     ports:
       - "8080:8080"
     restart: unless-stopped
-    profiles:
-      - local-llm               # opt-in: docker compose --profile local-llm up
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/models"]
       interval: 30s
