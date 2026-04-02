@@ -82,10 +82,21 @@
           <button type="button" onclick="llmContainerAction('start')" id="llm-btn-start" class="outline" style="width: auto; font-size: 0.82rem; padding: 0.3rem 0.7rem;">▶️ Start</button>
           <button type="button" onclick="llmContainerAction('stop')" id="llm-btn-stop" class="outline secondary" style="width: auto; font-size: 0.82rem; padding: 0.3rem 0.7rem;">⏹️ Stop</button>
           <button type="button" onclick="llmContainerAction('restart')" id="llm-btn-restart" class="outline" style="width: auto; font-size: 0.82rem; padding: 0.3rem 0.7rem;">🔄 Restart</button>
+          <button type="button" onclick="fetchLlmLogs()" id="llm-btn-logs" class="outline secondary" style="width: auto; font-size: 0.82rem; padding: 0.3rem 0.7rem;">📋 Logs</button>
         </div>
         <div id="llm-container-error" style="display: none; margin-top: 0.5rem; font-size: 0.8rem; color: #dc2626;"></div>
         <div id="llm-container-unavailable" style="display: none; margin-top: 0.4rem; font-size: 0.82rem; color: var(--pico-muted-color);">
           <em>Docker control not available — container management requires Docker socket access.</em>
+        </div>
+        <div id="llm-container-logs-wrap" style="display: none; margin-top: 0.6rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
+            <small style="font-weight: 600; color: var(--pico-muted-color);">Container logs (last 80 lines)</small>
+            <button type="button" onclick="fetchLlmLogs()" class="outline secondary" style="width: auto; font-size: 0.72rem; padding: 0.15rem 0.5rem;">↻ Refresh</button>
+          </div>
+          <pre id="llm-container-logs"
+               style="max-height: 250px; overflow-y: auto; background: #0f172a; color: #e2e8f0;
+                      padding: 0.7rem; border-radius: 6px; font-size: 0.75rem; line-height: 1.45;
+                      white-space: pre-wrap; word-break: break-all; margin: 0;"></pre>
         </div>
       </div>
 
@@ -791,6 +802,8 @@
   }
 
   /* ── LLM Container Management ──────────────────── */
+  var _llmPollTimer = null;
+
   function refreshLlmContainerStatus() {
     fetch('/api/settings/llm-container')
       .then(function(r) { return r.json(); })
@@ -811,6 +824,7 @@
           uptime.textContent = '';
           buttons.style.display = 'none';
           unavail.style.display = '';
+          _stopLlmPoll();
           return;
         }
 
@@ -840,7 +854,11 @@
           health.textContent = '✗ unhealthy';
           health.style.background = '#fee2e2'; health.style.color = '#991b1b';
         } else if (h === 'starting') {
-          health.textContent = '⏳ starting';
+          health.textContent = '⏳ starting…';
+          health.style.background = '#fef3c7'; health.style.color = '#92400e';
+        } else if (state === 'running') {
+          // Container is running but health not yet reported — model loading
+          health.textContent = '⏳ loading model…';
           health.style.background = '#fef3c7'; health.style.color = '#92400e';
         } else {
           health.textContent = '';
@@ -857,12 +875,37 @@
           errEl.textContent = data.error;
           errEl.style.display = '';
         }
+
+        // Auto-poll: if container is running but not yet healthy, keep checking
+        if (state === 'running' && h !== 'healthy') {
+          _startLlmPoll();
+        } else if (h === 'healthy') {
+          _stopLlmPoll();
+          // Also refresh the LLM API status when container becomes healthy
+          checkLlmStatus();
+        } else {
+          _stopLlmPoll();
+        }
       })
       .catch(function(err) {
         var errEl = document.getElementById('llm-container-error');
         errEl.textContent = 'Failed to check: ' + err;
         errEl.style.display = '';
       });
+  }
+
+  function _startLlmPoll() {
+    if (_llmPollTimer) return;  // already polling
+    _llmPollTimer = setInterval(function() {
+      refreshLlmContainerStatus();
+    }, 8000);  // poll every 8 seconds while model is loading
+  }
+
+  function _stopLlmPoll() {
+    if (_llmPollTimer) {
+      clearInterval(_llmPollTimer);
+      _llmPollTimer = null;
+    }
   }
 
   function llmContainerAction(action) {
@@ -888,8 +931,43 @@
         // Refresh status after a brief delay (container state change takes a moment)
         setTimeout(function() {
           refreshLlmContainerStatus();
-          checkLlmStatus();
+          // For start/restart, the model takes time to load — auto-poll will handle it
+          if (action === 'start' || action === 'restart') {
+            _startLlmPoll();
+          }
         }, 2000);
+      });
+  }
+
+  function fetchLlmLogs() {
+    var wrap = document.getElementById('llm-container-logs-wrap');
+    var pre = document.getElementById('llm-container-logs');
+    var btn = document.getElementById('llm-btn-logs');
+    btn.disabled = true;
+    btn.textContent = '⏳ Loading…';
+
+    fetch('/api/settings/llm-container/logs')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.logs) {
+          pre.textContent = data.logs;
+          wrap.style.display = '';
+          pre.scrollTop = pre.scrollHeight;
+        } else if (data.error) {
+          pre.textContent = '⚠️ ' + data.error;
+          wrap.style.display = '';
+        } else {
+          pre.textContent = '(no logs available)';
+          wrap.style.display = '';
+        }
+      })
+      .catch(function(err) {
+        pre.textContent = 'Error fetching logs: ' + err;
+        wrap.style.display = '';
+      })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = '📋 Logs';
       });
   }
 
