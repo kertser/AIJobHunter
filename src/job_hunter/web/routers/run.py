@@ -213,12 +213,10 @@ async def run_score(request: Request):
                 embedder = FakeEmbedder(fixed_similarity=0.5)
                 evaluator = FakeLLMEvaluator(fit_score=80, decision="apply")
             elif params.get("llm_provider") == "local":
-                # Local LLM: use OpenAI embedder if key available, else fake
-                api_key = params["openai_api_key"]
-                if api_key:
-                    embedder = OpenAIEmbedder(api_key=api_key)
-                else:
-                    embedder = FakeEmbedder(fixed_similarity=0.5)
+                # Local LLM mode: no OpenAI calls at all.
+                # Use FakeEmbedder (local models produce poor embeddings)
+                # and point the LLM evaluator at the local sidecar.
+                embedder = FakeEmbedder(fixed_similarity=0.5)
                 local_url = params.get("local_llm_url", "http://localhost:8080/v1")
                 local_model = params.get("local_llm_model", "") or "local"
                 from job_hunter.llm_client import get_task_params
@@ -267,17 +265,36 @@ async def run_score(request: Request):
 
             logger.info("Found %d unscored jobs to process", len(unscored_jobs))
             scored = 0
+            consecutive_errors = 0
             for i, job in enumerate(unscored_jobs, 1):
                 if not job.description_text:
                     logger.warning("Skipping %s (%s) — no description", job.hash, job.title)
                     continue
                 logger.info("Scoring job %d/%d: %s at %s", i, len(unscored_jobs), job.title, job.company)
-                result = compute_score(
-                    resume_text=params.get("resume_text", ""),
-                    job_description=job.description_text or "",
-                    embedder=embedder, llm_evaluator=evaluator,
-                    user_preferences=user_prefs,
-                )
+                try:
+                    result = compute_score(
+                        resume_text=params.get("resume_text", ""),
+                        job_description=job.description_text or "",
+                        embedder=embedder, llm_evaluator=evaluator,
+                        user_preferences=user_prefs,
+                    )
+                except Exception as exc:
+                    exc_str = str(exc)
+                    # Detect quota / rate-limit errors and abort early
+                    if "429" in exc_str or "quota" in exc_str.lower() or "rate" in exc_str.lower():
+                        logger.error(
+                            "❌ API quota/rate-limit error — aborting scoring. "
+                            "Switch to a local LLM in Settings or check your API plan. Error: %s",
+                            exc,
+                        )
+                        break
+                    consecutive_errors += 1
+                    logger.error("❌ score failed for %s: %s", job.title, exc)
+                    if consecutive_errors >= 3:
+                        logger.error("Too many consecutive errors (%d) — aborting scoring", consecutive_errors)
+                        break
+                    continue
+                consecutive_errors = 0
                 score_row = Score(
                     job_hash=job.hash, embedding_similarity=result["embedding_similarity"],
                     llm_fit_score=result["llm_fit_score"], missing_skills=result["missing_skills"],
@@ -320,6 +337,7 @@ async def run_apply(request: Request):
     data_dir = get_user_data_dir(request)
     params = _load_run_params(settings, data_dir=data_dir)
     captured_user_id = user_id
+    captured_settings = settings
 
     # Build form answers from user profile
     profile_form_answers: dict[str, str] = {}
@@ -363,6 +381,7 @@ async def run_apply(request: Request):
                     form_answers=profile_form_answers,
                     openai_api_key=params.get("openai_api_key", ""),
                     user_profile=user_profile_dict,
+                    settings=captured_settings,
                 )
                 result_map = {"success": ApplicationResult.SUCCESS, "dry_run": ApplicationResult.DRY_RUN,
                               "failed": ApplicationResult.FAILED, "blocked": ApplicationResult.BLOCKED,

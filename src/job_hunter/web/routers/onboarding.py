@@ -105,18 +105,31 @@ async def generate_profiles(
             from job_hunter.profile.generator import FakeProfileGenerator
             generator = FakeProfileGenerator()
         else:
-            if not api_key:
-                raise ValueError(
-                    "OpenAI API key not set. Go to Settings and enter your key."
+            from job_hunter.llm_client import get_task_params, is_local_provider
+            if is_local_provider(eff):
+                local_url = eff.local_llm_url or "http://localhost:8080/v1"
+                local_model = eff.local_llm_model or "local"
+                tp = get_task_params(eff, "profile_gen")
+                from job_hunter.profile.generator import OpenAIProfileGenerator
+                generator = OpenAIProfileGenerator(
+                    api_key="local-no-key-needed",
+                    model=local_model,
+                    base_url=local_url,
+                    temperature=tp.temperature,
+                    max_tokens=tp.max_tokens,
                 )
-            from job_hunter.profile.generator import OpenAIProfileGenerator
-            from job_hunter.llm_client import get_task_params
-            tp = get_task_params(eff, "profile_gen")
-            generator = OpenAIProfileGenerator(
-                api_key=api_key,
-                temperature=tp.temperature,
-                max_tokens=tp.max_tokens,
-            )
+            elif api_key:
+                tp = get_task_params(eff, "profile_gen")
+                from job_hunter.profile.generator import OpenAIProfileGenerator
+                generator = OpenAIProfileGenerator(
+                    api_key=api_key,
+                    temperature=tp.temperature,
+                    max_tokens=tp.max_tokens,
+                )
+            else:
+                raise ValueError(
+                    "No LLM available — set an OpenAI API key or switch to a local LLM in Settings."
+                )
 
         logger.info("Generating profiles via LLM…")
         result = await asyncio.to_thread(generator.generate, extracted)

@@ -62,9 +62,11 @@ async def run_resume_review(request: Request):
     from job_hunter.web.deps import get_effective_settings
     eff = get_effective_settings(request)
     api_key = eff.openai_api_key
-    if not api_key:
+
+    from job_hunter.llm_client import is_local_provider
+    if not api_key and not is_local_provider(eff):
         return JSONResponse(
-            {"error": "OpenAI API key not set. Go to Settings to configure it."},
+            {"error": "No LLM available — set an OpenAI API key or switch to a local LLM in Settings."},
             status_code=400,
         )
 

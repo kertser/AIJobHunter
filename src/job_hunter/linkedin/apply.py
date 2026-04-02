@@ -315,13 +315,27 @@ async def apply_to_job(
 
     from job_hunter.linkedin.session import LinkedInSession
 
-    # Initialize LLM form filler if we have the API key and profile
+    # Initialize LLM form filler if we have an LLM available and profile
     llm_filler = None
     profile_context = ""
-    if openai_api_key and user_profile:
+    _has_local_llm = False
+    if settings is not None:
+        from job_hunter.llm_client import is_local_provider
+        _has_local_llm = is_local_provider(settings)
+
+    if (_has_local_llm or openai_api_key) and user_profile:
         try:
             from job_hunter.linkedin.form_filler_llm import LLMFormFiller, build_profile_context
-            filler_kwargs: dict[str, Any] = {"api_key": openai_api_key}
+            if _has_local_llm:
+                local_url = getattr(settings, "local_llm_url", None) or "http://localhost:8080/v1"
+                local_model = getattr(settings, "local_llm_model", None) or "local"
+                filler_kwargs: dict[str, Any] = {
+                    "api_key": "local-no-key-needed",
+                    "model": local_model,
+                    "base_url": local_url,
+                }
+            else:
+                filler_kwargs = {"api_key": openai_api_key}
             if settings is not None:
                 from job_hunter.llm_client import get_task_params
                 tp = get_task_params(settings, "form_fill")
