@@ -82,6 +82,32 @@ def run_migrations(engine: Engine) -> None:
             changes += 1
 
 
+    # ── v3: add per-user settings columns to users ──
+    _users_columns: list[tuple[str, str]] = [
+        ("openai_api_key", "TEXT"),
+        ("llm_provider", "VARCHAR(50)"),
+        ("local_llm_url", "VARCHAR(500)"),
+        ("local_llm_model", "VARCHAR(200)"),
+        ("llm_temperature", "FLOAT"),
+        ("llm_max_tokens", "INTEGER"),
+        ("mock", "BOOLEAN"),
+        ("dry_run", "BOOLEAN"),
+        ("headless", "BOOLEAN"),
+        ("slowmo_ms", "INTEGER"),
+        ("email_provider", "VARCHAR(50)"),
+        ("resend_api_key", "TEXT"),
+        ("smtp_host", "VARCHAR(255)"),
+        ("smtp_port", "INTEGER"),
+        ("smtp_user", "VARCHAR(255)"),
+        ("smtp_password", "TEXT"),
+        ("smtp_use_tls", "BOOLEAN"),
+        ("notification_email", "VARCHAR(320)"),
+        ("notifications_enabled", "BOOLEAN"),
+    ]
+    for col_name, col_type in _users_columns:
+        if _add_column_if_missing(engine, "users", col_name, col_type):
+            changes += 1
+
     if changes:
         logger.info("migration: applied %d change(s)", changes)
     else:

@@ -757,7 +757,7 @@ AIJobHunter/
 │   ├── db/
 │   │   ├── models.py                     # ORM: Job, Score, ApplicationAttempt
 │   │   ├── repo.py                       # DB init, session, CRUD helpers
-│   │   └── migrations.py                 # Schema migration support (stub)
+│   │   └── migrations.py                 # Lightweight ALTER TABLE migrations (idempotent)
 │   │
 │   ├── profile/
 │   │   ├── extract.py                    # PDF text + LinkedIn URL scraping
@@ -917,23 +917,28 @@ All `uv`, `pytest`, and `docker compose` commands work identically on Windows. O
 
 ### One-command deploy
 
-The included `deploy.sh` script handles the full lifecycle — stop, prune, pull, build, run:
+The included `deploy.sh` script handles the full lifecycle via **docker compose** — stop, pull, build, start:
 
 ```bash
 chmod +x deploy.sh
-./deploy.sh
+./deploy.sh              # app only — web GUI on port 80
+./deploy.sh --with-llm   # app + local LLM sidecar (auto-downloads model if missing)
 ```
 
 > **Windows:** `deploy.sh` is Linux/macOS only. On Windows, use **Docker Desktop** with `docker compose` commands below, or run the script in **WSL**.
 
-This stops any running containers, prunes stale Docker resources, pulls the latest code,
-rebuilds the image, and starts the container on **port 80** with the `data/` volume and `.env` config.
+This stops running containers, pulls the latest code, rebuilds images, and starts
+the app on **port 80** with the `data/` volume and `.env` config. The `--with-llm`
+flag additionally builds and starts the local LLM sidecar on port 8080.
 
 ### Docker Compose
 
 ```bash
-# Build and start (works on all platforms including Windows)
+# Build and start — app only (works on all platforms including Windows)
 docker compose up -d
+
+# App + local LLM sidecar
+docker compose --profile local-llm up -d
 
 # View logs
 docker compose logs -f
@@ -942,44 +947,45 @@ docker compose logs -f
 docker compose down
 ```
 
-### Manual build
-
-```bash
-docker build -t ai-job-hunter .
-docker run -d -p 80:8000 -v ./data:/app/data --env-file .env --restart unless-stopped ai-job-hunter
-```
-
-The container:
-- Exposes the web GUI (default **port 80** via deploy script, **8000** via compose)
+The app container:
+- Exposes the web GUI on **port 80**
 - Mounts `./data` as a volume for persistent storage
 - Reads configuration from `.env`
 - Runs a health check every 30 s at `/api/health`
 - Restarts automatically (`unless-stopped`)
+- Connects to the LLM sidecar at `http://llm:8080/v1` via Docker networking (when running)
 
 ### Local LLM Sidecar
 
 An optional self-hosted LLM container provides an OpenAI-compatible API, so the system can run fully offline without an OpenAI API key. Uses [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) with GGUF models.
 
-**Quick start:**
+**Easiest way** — use the deploy script:
+
+```bash
+./deploy.sh --with-llm    # downloads model if missing, builds & starts both containers
+```
+
+**Manual setup:**
 
 ```bash
 # 1. Download a model (~1.8 GB default)
 .\scripts\download_model.ps1          # Windows
 ./scripts/download_model.sh           # Linux/macOS
 
-# 2. Start the sidecar
-docker compose --profile local-llm up llm -d
+# 2. Start both containers (app + LLM sidecar on same Docker network)
+docker compose --profile local-llm up -d
 
-# 3. Verify it's running
+# 3. Verify the sidecar is running
 curl http://localhost:8080/v1/models
 ```
 
-Then set **LLM Provider → Local LLM** in the web Settings page, or:
+Then set **LLM Provider → Local LLM** in the web Settings page, or add to `.env`:
 
 ```bash
 JOBHUNTER_LLM_PROVIDER=local
-JOBHUNTER_LOCAL_LLM_URL=http://localhost:8080/v1
 ```
+
+> **Note:** When running via docker compose, the app automatically uses `http://llm:8080/v1` (Docker internal hostname). The `JOBHUNTER_LOCAL_LLM_URL` env var in `docker-compose.yml` is pre-configured — no manual URL setup needed.
 
 **Server configuration** is in `config/llm_server.json` (mounted into the container):
 

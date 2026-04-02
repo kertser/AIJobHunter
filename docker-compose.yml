@@ -3,7 +3,7 @@ services:
     build: .
     container_name: ai-job-hunter
     ports:
-      - "8000:8000"
+      - "80:8000"
     volumes:
       - ./data:/app/data
     env_file:

@@ -1,56 +1,70 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────
-# AI Job Hunter — deployment script
-# Stops our container, pulls latest code, rebuilds
-# (with layer cache), and restarts.
+# AI Job Hunter — deployment script (docker compose)
+#
+# Usage:
+#   ./deploy.sh              # app only
+#   ./deploy.sh --with-llm   # app + local LLM sidecar
+#
+# Requires: docker compose v2  (docker compose version)
 # ─────────────────────────────────────────────────────
 set -euo pipefail
 
-CONTAINER_NAME="ai-job-hunter"
-IMAGE_NAME="ai-job-hunter"
-HOST_PORT=80
-CONTAINER_PORT=8000
-DATA_DIR="./data"
-ENV_FILE=".env"
+WITH_LLM=false
+for arg in "$@"; do
+    case "$arg" in
+        --with-llm) WITH_LLM=true ;;
+        *) echo "Unknown flag: $arg"; exit 1 ;;
+    esac
+done
+
+COMPOSE="docker compose"
+PROFILE_FLAGS=""
+if $WITH_LLM; then
+    PROFILE_FLAGS="--profile local-llm"
+fi
 
 echo "═══ AI Job Hunter Deploy ═══"
-
-# ── Stop and remove only our container ──
-echo "→ Stopping container…"
-docker stop "$CONTAINER_NAME" 2>/dev/null || true
-docker rm "$CONTAINER_NAME" 2>/dev/null || true
+if $WITH_LLM; then
+    echo "  Mode: app + local LLM sidecar"
+else
+    echo "  Mode: app only (use --with-llm to include LLM sidecar)"
+fi
 
 # ── Pull latest code ──
 echo "→ Pulling latest code…"
 git pull
 
-# ── Build image (layer cache preserved for fast rebuilds) ──
-echo "→ Building Docker image: ${IMAGE_NAME}…"
-DOCKER_BUILDKIT=0 docker build -t "$IMAGE_NAME" .
+# ── Stop running containers ──
+echo "→ Stopping containers…"
+# Clean up legacy containers started via raw 'docker run' (before compose migration)
+docker stop ai-job-hunter 2>/dev/null && docker rm ai-job-hunter 2>/dev/null || true
+docker stop ai-job-hunter-llm 2>/dev/null && docker rm ai-job-hunter-llm 2>/dev/null || true
+$COMPOSE $PROFILE_FLAGS down --remove-orphans 2>/dev/null || true
+
+# ── Build images (layer cache preserved for fast rebuilds) ──
+echo "→ Building images…"
+$COMPOSE $PROFILE_FLAGS build
 
 # ── Clean up dangling images from previous build ──
 docker image prune -f 2>/dev/null || true
 
-# ── Run container ──
-echo "→ Starting container: ${CONTAINER_NAME}…"
-ENV_FLAG=""
-if [ -f "$ENV_FILE" ]; then
-    ENV_FLAG="--env-file ${ENV_FILE}"
-else
-    echo "  (no .env file found — skipping --env-file)"
+# ── Download model if LLM sidecar requested but model missing ──
+if $WITH_LLM && [ ! -f "./models/model.gguf" ]; then
+    echo "→ Downloading LLM model (Llama-3.2-3B-Instruct, ~1.8 GB)…"
+    bash ./scripts/download_model.sh
 fi
 
-docker run -d \
-    --name "$CONTAINER_NAME" \
-    -p "${HOST_PORT}:${CONTAINER_PORT}" \
-    -v "${DATA_DIR}:/app/data" \
-    $ENV_FLAG \
-    --restart unless-stopped \
-    "$IMAGE_NAME"
+# ── Start containers ──
+echo "→ Starting containers…"
+$COMPOSE $PROFILE_FLAGS up -d
 
 echo ""
-echo "✓ AI Job Hunter is running at http://localhost:${HOST_PORT}"
-echo "  Container : ${CONTAINER_NAME}"
-echo "  Data      : ${DATA_DIR} → /app/data"
-echo "  Logs      : docker logs -f ${CONTAINER_NAME}"
-echo "  Stop      : docker stop ${CONTAINER_NAME}"
+echo "✓ AI Job Hunter is running"
+echo "  App       : http://localhost:80"
+echo "  Data      : ./data → /app/data"
+if $WITH_LLM; then
+    echo "  LLM API   : http://localhost:8080/v1  (internal: http://llm:8080/v1)"
+fi
+echo "  Logs      : $COMPOSE $PROFILE_FLAGS logs -f"
+echo "  Stop      : $COMPOSE $PROFILE_FLAGS down"
