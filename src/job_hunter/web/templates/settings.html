@@ -44,17 +44,94 @@
     </label>
   </div>
 
-  <label>
-    OpenAI API Key
-    <input type="password" name="openai_api_key" placeholder="{{ api_key_masked }}">
-    <small>Leave blank to keep current key. Current: {{ api_key_masked }}</small>
-  </label>
+  <h3>🤖 LLM Provider</h3>
+  <div class="grid">
+    <label>
+      Provider
+      <select name="llm_provider" id="llm-provider-select">
+        <option value="openai" {% if settings.llm_provider == 'openai' %}selected{% endif %}>OpenAI (cloud)</option>
+        <option value="local" {% if settings.llm_provider == 'local' %}selected{% endif %}>Local LLM (self-hosted)</option>
+      </select>
+      <small>Choose between OpenAI's API or a self-hosted local model via llama-cpp-python.</small>
+    </label>
+  </div>
+
+  <div id="openai-settings" {% if settings.llm_provider == 'local' %}style="display:none"{% endif %}>
+    <label>
+      OpenAI API Key
+      <input type="password" name="openai_api_key" placeholder="{{ api_key_masked }}">
+      <small>Leave blank to keep current key. Current: {{ api_key_masked }}</small>
+    </label>
+  </div>
+
+  <div id="local-llm-settings" {% if settings.llm_provider != 'local' %}style="display:none"{% endif %}>
+    <div style="padding: 1rem 1.2rem; border-left: 4px solid var(--pico-primary); border-radius: 8px; background: var(--pico-card-background-color); box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 1rem;">
+      <div id="llm-sidecar-status" style="margin-bottom: 0.8rem; font-size: 0.9rem; padding: 0.5rem 0.7rem; border-radius: 6px; background: rgba(0,0,0,0.03);">
+        <span id="llm-status-indicator">Checking LLM sidecar…</span>
+      </div>
+      <div class="grid">
+        <label>
+          Server URL
+          <input type="text" name="local_llm_url" value="{{ settings.local_llm_url }}" placeholder="http://localhost:8080/v1">
+          <small>The OpenAI-compatible API endpoint (e.g. llama-cpp-python server).</small>
+        </label>
+        <label>
+          Model Name <small>(optional)</small>
+          <input type="text" name="local_llm_model" value="{{ settings.local_llm_model }}" placeholder="auto-detected">
+          <small>Leave blank to auto-detect from the server.</small>
+        </label>
+      </div>
+      <button type="button" id="btn-check-llm" class="outline" style="margin-top: 0.3rem;">🔍 Check Connection</button>
+      <details style="margin-top: 0.8rem;">
+        <summary style="font-size: 0.84rem; cursor: pointer;">Setup instructions</summary>
+        <div style="font-size: 0.84rem; color: var(--pico-muted-color); line-height: 1.6; margin-top: 0.5rem;">
+          <ol style="padding-left: 1.2rem;">
+            <li>Download a GGUF model: <code>.\scripts\download_model.ps1</code> (Windows) or <code>./scripts/download_model.sh</code> (Linux/Mac)</li>
+            <li>Start the LLM sidecar: <code>docker compose --profile local-llm up llm</code></li>
+            <li>Click "Check Connection" above to verify</li>
+          </ol>
+          <p style="margin-top: 0.5rem;"><strong>Recommended models:</strong></p>
+          <table style="font-size: 0.8rem;">
+            <tr><th>Model</th><th>Size</th><th>Quality</th></tr>
+            <tr><td>Llama-3.2-1B-Instruct-Q4_K_S</td><td>~700 MB</td><td>Basic (fast)</td></tr>
+            <tr><td>Llama-3.2-3B-Instruct-Q4_K_M</td><td>~1.8 GB</td><td>Good (default)</td></tr>
+            <tr><td>Phi-3.5-mini-Q4_K_M</td><td>~2.2 GB</td><td>Good (128K context)</td></tr>
+            <tr><td>Mistral-7B-Instruct-Q4_K_M</td><td>~4.4 GB</td><td>Great (slow)</td></tr>
+          </table>
+          <p>For reliable JSON output (scoring, profiles), 3B+ models are recommended.</p>
+          <p>OpenAI API key is still optional — if set, it will be used for <strong>embeddings only</strong> (local models produce poor embeddings).</p>
+        </div>
+      </details>
+    </div>
+    <label>
+      OpenAI API Key <small>(optional, for embeddings)</small>
+      <input type="password" name="openai_api_key" placeholder="{{ api_key_masked }}">
+      <small>If set, OpenAI will be used for high-quality embeddings. Otherwise similarity scoring uses a fixed value. Current: {{ api_key_masked }}</small>
+    </label>
+  </div>
 
   <label>
     Data Directory
     <input type="text" value="{{ settings.data_dir }}" disabled>
     <small>Cannot be changed at runtime.</small>
   </label>
+
+  <h3>🎛️ LLM Inference Parameters</h3>
+  <p style="color: var(--pico-muted-color); font-size: 0.84rem; margin-top: 0;">
+    Global defaults for all LLM calls. Per-task overrides (scoring, market extraction, etc.) are pre-configured with optimal values.
+  </p>
+  <div class="grid">
+    <label>
+      Temperature
+      <input type="number" name="llm_temperature" value="{{ settings.llm_temperature }}" min="0" max="2" step="0.05">
+      <small>Lower = more deterministic. Default: 0.2. Scoring uses 0.2, extraction uses 0.0.</small>
+    </label>
+    <label>
+      Max Tokens
+      <input type="number" name="llm_max_tokens" value="{{ settings.llm_max_tokens }}" min="0" step="100">
+      <small>0 = no limit (provider default). Per-task overrides apply automatically.</small>
+    </label>
+  </div>
 
   <hr style="margin: 2rem 0;">
 
@@ -631,6 +708,11 @@
       headless: fd.has('headless'),
       slowmo_ms: parseInt(fd.get('slowmo_ms')) || 0,
       log_level: fd.get('log_level'),
+      llm_provider: fd.get('llm_provider') || 'openai',
+      local_llm_url: fd.get('local_llm_url') || '',
+      local_llm_model: fd.get('local_llm_model') || '',
+      llm_temperature: parseFloat(fd.get('llm_temperature')) || 0.2,
+      llm_max_tokens: parseInt(fd.get('llm_max_tokens')) || 0,
       email_provider: fd.get('email_provider') || 'resend',
       smtp_host: fd.get('smtp_host') || '',
       smtp_port: parseInt(fd.get('smtp_port')) || 587,
@@ -646,6 +728,45 @@
     var resendKey = fd.get('resend_api_key');
     if (resendKey && resendKey.trim()) body.resend_api_key = resendKey.trim();
     return body;
+  }
+
+  /* ── LLM Provider Toggle ── */
+  (function() {
+    var sel = document.getElementById('llm-provider-select');
+    if (!sel) return;
+    sel.addEventListener('change', function() {
+      var isLocal = sel.value === 'local';
+      document.getElementById('openai-settings').style.display = isLocal ? 'none' : '';
+      document.getElementById('local-llm-settings').style.display = isLocal ? '' : 'none';
+      if (isLocal) checkLlmStatus();
+    });
+  })();
+
+  function checkLlmStatus() {
+    var ind = document.getElementById('llm-status-indicator');
+    if (!ind) return;
+    ind.textContent = '⏳ Checking…';
+    fetch('/api/settings/llm-status')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.online) {
+          var models = data.models && data.models.length ? data.models.join(', ') : 'unknown';
+          ind.innerHTML = '🟢 <strong>Connected</strong> — ' + data.url + ' (models: ' + models + ')';
+        } else {
+          ind.innerHTML = '🔴 <strong>Offline</strong> — ' + data.url + '<br><small>' + (data.error || 'Cannot reach server') + '</small>';
+        }
+      })
+      .catch(function(err) {
+        ind.innerHTML = '🔴 <strong>Error</strong> — ' + err;
+      });
+  }
+
+  var btnCheckLlm = document.getElementById('btn-check-llm');
+  if (btnCheckLlm) btnCheckLlm.addEventListener('click', checkLlmStatus);
+
+  // Auto-check on page load if local provider is selected
+  if (document.getElementById('llm-provider-select') && document.getElementById('llm-provider-select').value === 'local') {
+    checkLlmStatus();
   }
 
   function sendTestEmail() {

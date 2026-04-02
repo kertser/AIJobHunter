@@ -13,10 +13,10 @@ Two pipelines sharing one SQLite DB:
 
 ### Core Packages
 
-- **config/** — `AppSettings` (Pydantic Settings, env prefix `JOBHUNTER_`, reads `.env`), `SearchProfile`, `UserProfile`, `ScheduleConfig`, `ScheduleRunRecord`, `PipelineMode` as Pydantic models; YAML loader/saver in `loader.py`; `save_settings_env()` persists settings to `.env` via `python-dotenv` `set_key()`
+- **config/** — `AppSettings` (Pydantic Settings, env prefix `JOBHUNTER_`, reads `.env`), `SearchProfile`, `UserProfile`, `ScheduleConfig`, `ScheduleRunRecord`, `PipelineMode` as Pydantic models; `LLMTaskConfig` for per-task inference overrides; YAML loader/saver in `loader.py`; `save_settings_env()` persists settings to `.env` via `python-dotenv` `set_key()`; `llm_provider` (`"openai"` or `"local"`), `local_llm_url` (default `http://localhost:8080/v1`), `local_llm_model`, `llm_temperature` (default 0.2), `llm_max_tokens` (default 0 = no limit), `llm_task_overrides` (per-task temperature/max_tokens presets) settings for routing LLM calls to a local llama-cpp-python sidecar
 - **db/** — SQLAlchemy 2.0 ORM (`Job`, `Score`, `ApplicationAttempt`) over SQLite with WAL mode; all three tables carry optional `user_id` FK to `users` for multi-user data isolation; `Job` has `source` (default `"linkedin"`) and `notes` fields; `Score` has `resume_id`; `repo.py` has all CRUD helpers; dedup via SHA-256 hash (`utils/hashing.py`); `migrations.py` is a stub for future Alembic integration
 - **linkedin/** — Playwright browser automation: `session.py` (cookie auth + `remote_login()` for headless/Docker programmatic login with verification code support and checkpoint screenshot streaming + `solve_captcha_interactively()` standalone helper for interactive CAPTCHA solving during discovery/apply), `discover.py` (search + pagination with comprehensive anti-detection: organic warm-up browsing, human-like mouse/scroll simulation, variable delays, referer headers, cookie refresh; optional `captcha_handler` callback for interactive CAPTCHA solving via web UI), `parse.py` (HTML→data), `apply.py` (Easy Apply wizard), `forms.py`/`form_filler_llm.py` (LLM-powered form filling), `selectors.py` (CSS/XPath constants)
-- **matching/** — `embeddings.py` (OpenAI embeddings + cosine similarity), `llm_eval.py` (GPT fit evaluation returning structured JSON), `scoring.py` (combines both into a decision; `compute_market_boost()` enriches scores with market opportunity signals when market data exists), `description_cleaner.py`
+- **matching/** — `embeddings.py` (OpenAI embeddings + cosine similarity; `base_url` param for local provider), `llm_eval.py` (GPT/local LLM fit evaluation returning structured JSON; `base_url` param + `safe_json_parse` for local model tolerance), `scoring.py` (combines both into a decision; `compute_market_boost()` enriches scores with market opportunity signals when market data exists), `description_cleaner.py`
 - **orchestration/** — `pipeline.py` (async `run_pipeline()` wiring all stages), `policies.py` (rate limits, blacklists, daily caps)
 - **reporting/** — `report.py` (`generate_report()` producing daily Markdown + JSON summaries under `data/reports/`)
 - **notifications/** — `email.py` with provider pattern: `BaseNotifier` (ABC) → `SmtpNotifier` (SMTP with optional auth, TLS, `last_error` diagnostics), `ResendNotifier` (API-key-based, free tier), `FakeNotifier` (tests); `build_notifier_from_settings()` auto-selects provider (Resend → SMTP fallback → None); `send_pipeline_summary()` and `send_test_email()` helpers
@@ -25,6 +25,7 @@ Two pipelines sharing one SQLite DB:
 - **web/** — FastAPI + HTMX + Pico CSS; app factory in `app.py` (`app.state.dotenv_path` for settings persistence); login-required middleware (JWT cookie or `Authorization: Bearer` header); DI via `deps.py` (DB session, settings, task manager, `get_current_user`, `get_effective_settings` with per-user overlays, `require_admin` gate); routers under `web/routers/` (auth, account, admin, dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings, schedule); `TaskManager` in `task_manager.py` runs one background task at a time with SSE event broadcasting; run router includes interactive CAPTCHA solving during discover/pipeline tasks via `POST /api/run/captcha-click` with screenshot streaming and click queue (same pattern as login CAPTCHA); settings router includes LinkedIn session cookie management: guided connect wizard (open LinkedIn → copy `li_at` → paste), browser auto-capture via Playwright (`POST /api/settings/linkedin-browser-login` — headed browser on local machine), cookie paste (`POST /api/settings/cookies-paste`), cookie file upload/status/delete (`/api/settings/cookies*`), remote login (`/api/settings/linkedin-login`, `/api/settings/linkedin-verify`) with SSE progress streaming and two-phase verification-code flow via `asyncio.Future`, and checkpoint screenshot serving (`/api/settings/checkpoint-screenshot`) with frontend rendering via `SCREENSHOT:<filename>` SSE markers
 - **profile/** — `extract.py` (PDF text + LinkedIn scraping), `generator.py` (LLM profile generation)
 - **utils/** — `hashing.py` (SHA-256 job dedup), `logging.py` (namespaced logger setup), `rate_limit.py` (`RateLimiter` — token-bucket for browser automation), `retry.py` (`retry` decorator with exponential back-off, works for sync and async functions)
+- **llm_client.py** — Central factory for OpenAI-compatible LLM clients: `build_llm_client(settings)` returns an `openai.OpenAI` instance routed to either real OpenAI or a local llama-cpp-python sidecar based on `llm_provider`; `get_chat_model(settings)` returns the model name; `get_task_params(settings, task_name)` resolves per-task temperature/max_tokens (global defaults ← per-task override); `safe_json_parse(raw)` strips markdown fences and extracts JSON from local model responses; `is_local_provider(settings)` helper
 
 ### Market Intelligence Package
 
@@ -181,4 +182,22 @@ chmod +x deploy.sh
 ```
 
 See also `docker-compose.yml` for compose-based deployment (works on all platforms) and `Dockerfile` for the image definition.
+
+### Local LLM Sidecar
+
+An optional llama-cpp-python container provides a self-hosted OpenAI-compatible API at `http://llm:8080/v1`. No API key required.
+
+```powershell
+.\scripts\download_model.ps1                           # download default GGUF model (~1.8 GB)
+docker compose --profile local-llm up llm              # start the sidecar
+```
+
+Then set **LLM Provider → Local LLM** in the web Settings page, or:
+
+```powershell
+$env:JOBHUNTER_LLM_PROVIDER = "local"
+$env:JOBHUNTER_LOCAL_LLM_URL = "http://localhost:8080/v1"
+```
+
+Files: `Dockerfile.llm` (sidecar image), `models/` (bind-mounted GGUF files, gitignored), `scripts/download_model.{sh,ps1}` (model download helpers). Embeddings still use OpenAI when an API key is set (local models produce poor embeddings); without a key, similarity defaults to a fixed value.
 

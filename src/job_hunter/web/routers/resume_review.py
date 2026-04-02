@@ -152,16 +152,18 @@ Be specific, practical, and encouraging. Reference actual skills and job require
     )
 
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
+        from job_hunter.llm_client import build_llm_client, get_chat_model, get_task_params
+        client = build_llm_client(eff)
+        model = get_chat_model(eff)
+        params = get_task_params(eff, "resume_review")
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            temperature=0.4,
-            max_tokens=2000,
+            temperature=params.temperature,
+            **({"max_tokens": params.max_tokens} if params.max_tokens else {}),
         )
         review_text = response.choices[0].message.content or "No review generated."
     except Exception as exc:

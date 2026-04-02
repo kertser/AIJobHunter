@@ -215,16 +215,16 @@ class PipelineScheduler:
         if config.pipeline_mode == PipelineMode.DISCOVER:
             # Discover only — call run_pipeline with apply disabled
             params["dry_run"] = True
-            result = await run_pipeline(**params)
+            result = await run_pipeline(**params, settings=settings)
             return result if isinstance(result, dict) else {"result": "ok"}
 
         elif config.pipeline_mode == PipelineMode.DISCOVER_SCORE:
             params["dry_run"] = True
-            result = await run_pipeline(**params)
+            result = await run_pipeline(**params, settings=settings)
             return result if isinstance(result, dict) else {"result": "ok"}
 
         else:  # FULL
-            result = await run_pipeline(**params)
+            result = await run_pipeline(**params, settings=settings)
             return result if isinstance(result, dict) else {"result": "ok"}
 
     async def _run_market(self, settings: Any, engine: Any) -> dict[str, Any]:
@@ -239,8 +239,19 @@ class PipelineScheduler:
         )
 
         if settings.openai_api_key:
-            extractor = OpenAIMarketExtractor(api_key=settings.openai_api_key)
-            title_norm = OpenAITitleNormalizer(api_key=settings.openai_api_key)
+            from job_hunter.llm_client import get_task_params
+            ext_tp = get_task_params(settings, "market_extract")
+            title_tp = get_task_params(settings, "title_normalize")
+            extractor = OpenAIMarketExtractor(
+                api_key=settings.openai_api_key,
+                temperature=ext_tp.temperature,
+                max_tokens=ext_tp.max_tokens,
+            )
+            title_norm = OpenAITitleNormalizer(
+                api_key=settings.openai_api_key,
+                temperature=title_tp.temperature,
+                max_tokens=title_tp.max_tokens,
+            )
         else:
             extractor = HeuristicExtractor()
             title_norm = HeuristicTitleNormalizer()

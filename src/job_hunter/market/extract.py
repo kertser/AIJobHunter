@@ -289,16 +289,30 @@ class OpenAIMarketExtractor(MarketExtractor):
 
     version: str = "openai-1.0"
 
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4o-mini",
+        *,
+        base_url: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> None:
         self.api_key = api_key
         self.model = model
+        self.base_url = base_url
+        self.temperature = temperature
+        self.max_tokens = max_tokens
 
     def extract(self, inp: ExtractionInput) -> ExtractionResult:
-        import json
-
         from openai import OpenAI
+        from job_hunter.llm_client import safe_json_parse
 
-        client = OpenAI(api_key=self.api_key)
+        kwargs: dict = {"api_key": self.api_key}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+
+        client = OpenAI(**kwargs)
 
         system = (
             "You are a labor-market analyst.  Given a job posting, extract:\n"
@@ -318,14 +332,10 @@ class OpenAIMarketExtractor(MarketExtractor):
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=0.0,
+            temperature=self.temperature if self.temperature is not None else 0.0,
         )
         raw = resp.choices[0].message.content or "{}"
-        # Strip markdown fences if present
-        raw = raw.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
-        data = json.loads(raw)
+        data = safe_json_parse(raw)
         return ExtractionResult(**data)
 
 

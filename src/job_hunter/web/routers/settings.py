@@ -25,6 +25,11 @@ class SettingsUpdate(BaseModel):
     slowmo_ms: int | None = None
     log_level: str | None = None
     openai_api_key: str | None = None
+    llm_provider: str | None = None
+    local_llm_url: str | None = None
+    local_llm_model: str | None = None
+    llm_temperature: float | None = None
+    llm_max_tokens: int | None = None
     # Email notification settings
     email_provider: str | None = None
     resend_api_key: str | None = None
@@ -62,6 +67,8 @@ async def get_settings_api(request: Request):
         "log_level": s.log_level.value,
         "data_dir": str(s.data_dir),
         "llm_provider": s.llm_provider,
+        "local_llm_url": s.local_llm_url,
+        "local_llm_model": s.local_llm_model,
         "openai_api_key": _mask_key(s.openai_api_key),
         "email_provider": s.email_provider,
         "resend_api_key": _mask_key(s.resend_api_key),
@@ -92,6 +99,16 @@ async def update_settings_api(body: SettingsUpdate, request: Request, session: S
         updates["log_level"] = body.log_level  # store as string for User row
     if body.openai_api_key and body.openai_api_key.strip():
         updates["openai_api_key"] = body.openai_api_key.strip()
+    if body.llm_provider is not None:
+        updates["llm_provider"] = body.llm_provider
+    if body.local_llm_url is not None:
+        updates["local_llm_url"] = body.local_llm_url
+    if body.local_llm_model is not None:
+        updates["local_llm_model"] = body.local_llm_model
+    if body.llm_temperature is not None:
+        updates["llm_temperature"] = body.llm_temperature
+    if body.llm_max_tokens is not None:
+        updates["llm_max_tokens"] = body.llm_max_tokens
     if body.email_provider is not None:
         updates["email_provider"] = body.email_provider
     if body.resend_api_key and body.resend_api_key.strip():
@@ -175,6 +192,32 @@ async def test_email(request: Request):
         return {"sent": True}
     detail = getattr(notifier, "last_error", "") or "Failed to send. Check settings."
     return JSONResponse({"error": detail}, status_code=500)
+
+
+@router.get("/api/settings/llm-status")
+async def llm_status(request: Request):
+    """Check whether the local LLM sidecar is reachable and return model info."""
+    import asyncio as _aio
+    from urllib.request import urlopen, Request as UrlRequest
+    from urllib.error import URLError
+
+    from job_hunter.web.deps import get_effective_settings
+    s = get_effective_settings(request)
+    url = (s.local_llm_url or "http://localhost:8080/v1").rstrip("/")
+    models_url = f"{url}/models"
+
+    def _check():
+        try:
+            req = UrlRequest(models_url, method="GET")
+            with urlopen(req, timeout=5) as resp:
+                import json as _json
+                data = _json.loads(resp.read())
+                models = [m.get("id", "?") for m in data.get("data", [])]
+                return {"online": True, "url": url, "models": models}
+        except (URLError, OSError, Exception) as exc:
+            return {"online": False, "url": url, "error": str(exc)}
+
+    return await _aio.to_thread(_check)
 
 
 def _mask_key(key: str) -> str:

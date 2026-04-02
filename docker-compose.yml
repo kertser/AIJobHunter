@@ -11,6 +11,12 @@ services:
     environment:
       - JOBHUNTER_DATA_DIR=/app/data
       - JOBHUNTER_HEADLESS=true
+      # Point to the LLM sidecar (used when llm_provider=local)
+      - JOBHUNTER_LOCAL_LLM_URL=http://llm:8080/v1
+    depends_on:
+      llm:
+        condition: service_started
+        required: false          # app still works without the LLM sidecar
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
@@ -18,4 +24,27 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # ── Local LLM sidecar (OpenAI-compatible API) ───────────────────
+  # Download a model first:  ./scripts/download_model.sh
+  # Then:  docker compose up llm
+  llm:
+    build:
+      context: .
+      dockerfile: Dockerfile.llm
+    container_name: ai-job-hunter-llm
+    volumes:
+      - ./models:/models
+      - ./config/llm_server.json:/app/config/llm_server.json:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    profiles:
+      - local-llm               # opt-in: docker compose --profile local-llm up
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/models"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 

@@ -53,7 +53,7 @@ def extract(
     ctx: typer.Context,
     extractor: str = typer.Option(
         "heuristic", "--extractor", "-e",
-        help="Extractor to use: heuristic | openai | fake",
+        help="Extractor to use: heuristic | openai | local | fake",
     ),
 ) -> None:
     """Run signal extraction on un-extracted market events."""
@@ -75,7 +75,19 @@ def extract(
         if not api_key:
             rprint("[red]✗[/red] JOBHUNTER_OPENAI_API_KEY is required for the OpenAI extractor.")
             raise typer.Exit(1)
-        ext = OpenAIMarketExtractor(api_key=api_key)
+        from job_hunter.llm_client import get_task_params
+        tp = get_task_params(settings, "market_extract")
+        ext = OpenAIMarketExtractor(api_key=api_key, temperature=tp.temperature, max_tokens=tp.max_tokens)
+    elif extractor == "local":
+        from job_hunter.llm_client import get_task_params
+        tp = get_task_params(settings, "market_extract")
+        ext = OpenAIMarketExtractor(
+            api_key="local-no-key-needed",
+            model=settings.local_llm_model or "local",
+            base_url=settings.local_llm_url or "http://localhost:8080/v1",
+            temperature=tp.temperature,
+            max_tokens=tp.max_tokens,
+        )
     elif extractor == "fake":
         ext = FakeMarketExtractor()
     else:
@@ -242,7 +254,7 @@ def role_model_cmd(
     threshold: float = typer.Option(0.3, "--threshold", help="Min importance to keep"),
     normalizer: str = typer.Option(
         "heuristic", "--normalizer", "-n",
-        help="Title normaliser: heuristic | openai | fake | legacy",
+        help="Title normaliser: heuristic | openai | local | fake | legacy",
     ),
 ) -> None:
     """Build role archetypes from job extraction data."""
@@ -264,7 +276,19 @@ def role_model_cmd(
         if not api_key:
             rprint("[red]✗[/red] JOBHUNTER_OPENAI_API_KEY is required for the OpenAI normaliser.")
             raise typer.Exit(1)
-        title_norm = OpenAITitleNormalizer(api_key=api_key)
+        from job_hunter.llm_client import get_task_params
+        tp = get_task_params(settings, "title_normalize")
+        title_norm = OpenAITitleNormalizer(api_key=api_key, temperature=tp.temperature, max_tokens=tp.max_tokens)
+    elif normalizer == "local":
+        from job_hunter.llm_client import get_task_params
+        tp = get_task_params(settings, "title_normalize")
+        title_norm = OpenAITitleNormalizer(
+            api_key="local-no-key-needed",
+            model=settings.local_llm_model or "local",
+            base_url=settings.local_llm_url or "http://localhost:8080/v1",
+            temperature=tp.temperature,
+            max_tokens=tp.max_tokens,
+        )
     elif normalizer == "fake":
         title_norm = FakeTitleNormalizer()
     elif normalizer == "legacy":
@@ -548,7 +572,7 @@ def run_all_cmd(
     ctx: typer.Context,
     extractor: str = typer.Option(
         "heuristic", "--extractor", "-e",
-        help="Extractor to use: heuristic | openai | fake",
+        help="Extractor to use: heuristic | openai | local | fake",
     ),
     profile: str = typer.Option(
         "default", "--profile", "-p",
@@ -556,7 +580,7 @@ def run_all_cmd(
     ),
     normalizer: str = typer.Option(
         "heuristic", "--normalizer", "-n",
-        help="Title normaliser: heuristic | openai | fake | legacy",
+        help="Title normaliser: heuristic | openai | local | fake | legacy",
     ),
 ) -> None:
     """Run the full market pipeline: ingest → extract → graph → trends → role-model → candidate-model → match."""
@@ -584,7 +608,19 @@ def run_all_cmd(
         if not api_key:
             rprint("[red]✗[/red] JOBHUNTER_OPENAI_API_KEY is required for the OpenAI extractor.")
             raise typer.Exit(1)
-        ext = OpenAIMarketExtractor(api_key=api_key)
+        from job_hunter.llm_client import get_task_params
+        tp = get_task_params(settings, "market_extract")
+        ext = OpenAIMarketExtractor(api_key=api_key, temperature=tp.temperature, max_tokens=tp.max_tokens)
+    elif extractor == "local":
+        from job_hunter.llm_client import get_task_params
+        tp = get_task_params(settings, "market_extract")
+        ext = OpenAIMarketExtractor(
+            api_key="local-no-key-needed",
+            model=settings.local_llm_model or "local",
+            base_url=settings.local_llm_url or "http://localhost:8080/v1",
+            temperature=tp.temperature,
+            max_tokens=tp.max_tokens,
+        )
     elif extractor == "fake":
         ext = FakeMarketExtractor()
     else:
@@ -596,7 +632,19 @@ def run_all_cmd(
         if not api_key:
             rprint("[red]✗[/red] JOBHUNTER_OPENAI_API_KEY is required for the OpenAI normaliser.")
             raise typer.Exit(1)
-        title_norm = OpenAITitleNormalizer(api_key=api_key)
+        from job_hunter.llm_client import get_task_params as _gtp
+        _tp = _gtp(settings, "title_normalize")
+        title_norm = OpenAITitleNormalizer(api_key=api_key, temperature=_tp.temperature, max_tokens=_tp.max_tokens)
+    elif normalizer == "local":
+        from job_hunter.llm_client import get_task_params as _gtp
+        _tp = _gtp(settings, "title_normalize")
+        title_norm = OpenAITitleNormalizer(
+            api_key="local-no-key-needed",
+            model=settings.local_llm_model or "local",
+            base_url=settings.local_llm_url or "http://localhost:8080/v1",
+            temperature=_tp.temperature,
+            max_tokens=_tp.max_tokens,
+        )
     elif normalizer == "fake":
         title_norm = FakeTitleNormalizer()
     elif normalizer == "legacy":

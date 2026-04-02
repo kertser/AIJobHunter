@@ -79,7 +79,8 @@ def update_user_settings(session: Session, user_id: uuid.UUID, **kwargs) -> User
     Returns the updated User or None if not found.
     """
     _SETTINGS_FIELDS = {
-        "openai_api_key", "llm_provider", "mock", "dry_run", "headless",
+        "openai_api_key", "llm_provider", "llm_temperature", "llm_max_tokens",
+        "mock", "dry_run", "headless",
         "slowmo_ms", "email_provider", "resend_api_key", "smtp_host",
         "smtp_port", "smtp_user", "smtp_password", "smtp_use_tls",
         "notification_email", "notifications_enabled",

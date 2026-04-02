@@ -109,7 +109,13 @@ async def generate_profiles(
                     "OpenAI API key not set. Go to Settings and enter your key."
                 )
             from job_hunter.profile.generator import OpenAIProfileGenerator
-            generator = OpenAIProfileGenerator(api_key=api_key)
+            from job_hunter.llm_client import get_task_params
+            tp = get_task_params(eff, "profile_gen")
+            generator = OpenAIProfileGenerator(
+                api_key=api_key,
+                temperature=tp.temperature,
+                max_tokens=tp.max_tokens,
+            )
 
         logger.info("Generating profiles via LLM…")
         result = await asyncio.to_thread(generator.generate, extracted)

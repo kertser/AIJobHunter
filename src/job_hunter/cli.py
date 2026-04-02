@@ -216,7 +216,13 @@ def profile(
         rprint("[red]✗[/red] JOBHUNTER_OPENAI_API_KEY is not set. Export it and try again.")
         raise typer.Exit(1)
 
-    generator: ProfileGenerator = OpenAIProfileGenerator(api_key=api_key)
+    from job_hunter.llm_client import get_task_params
+    tp = get_task_params(state.settings, "profile_gen")
+    generator: ProfileGenerator = OpenAIProfileGenerator(
+        api_key=api_key,
+        temperature=tp.temperature,
+        max_tokens=tp.max_tokens,
+    )
 
     rprint("[bold]Generating profile via LLM…[/bold]")
     result = generator.generate(extracted)
@@ -369,7 +375,13 @@ def score(
             rprint("[red]✗[/red] JOBHUNTER_OPENAI_API_KEY is not set. Use --mock for testing or export the key.")
             raise typer.Exit(1)
         embedder = OpenAIEmbedder(api_key=api_key)
-        evaluator = OpenAILLMEvaluator(api_key=api_key)
+        from job_hunter.llm_client import get_task_params
+        tp = get_task_params(settings, "scoring")
+        evaluator = OpenAILLMEvaluator(
+            api_key=api_key,
+            temperature=tp.temperature,
+            max_tokens=tp.max_tokens,
+        )
 
     # --- Score all unscored jobs ---
     engine = get_engine(settings.data_dir)
@@ -688,6 +700,7 @@ def run(
             location=location,
             remote=remote,
             seniority=seniority,
+            settings=settings,
         )
     )
 
