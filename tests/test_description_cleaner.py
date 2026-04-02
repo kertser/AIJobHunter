@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from job_hunter.matching.description_cleaner import clean_description_rules
+from job_hunter.matching.description_cleaner import clean_description_rules, looks_llm_formatted
 
 
 class TestCleanDescriptionRules:
@@ -103,4 +103,39 @@ class TestCleanDescriptionRules:
         assert "Tailor my resume" not in result
         assert "Select language" not in result
         assert "Post a job" not in result
+
+
+class TestLooksLlmFormatted:
+    def test_detects_markdown_formatted_text(self) -> None:
+        text = (
+            "Senior Python Developer at Acme Corp.\n\n"
+            "**Responsibilities**\n"
+            "- Build and maintain backend services\n"
+            "- Collaborate with cross-functional teams\n\n"
+            "**Requirements**\n"
+            "- 5+ years of **Python** experience\n"
+            "- Experience with **FastAPI** and **Docker**\n"
+        )
+        assert looks_llm_formatted(text) is True
+
+    def test_rejects_plain_text(self) -> None:
+        text = (
+            "We are looking for a Senior Python Developer with 5+ years experience.\n"
+            "Requirements: Python, FastAPI, AWS, Docker.\n"
+            "Benefits: Remote work, competitive salary.\n"
+        )
+        assert looks_llm_formatted(text) is False
+
+    def test_rejects_empty_and_short(self) -> None:
+        assert looks_llm_formatted("") is False
+        assert looks_llm_formatted(None) is False
+        assert looks_llm_formatted("short") is False
+
+    def test_rejects_bold_only_without_bullets(self) -> None:
+        text = "This has **bold** text but no bullet points at all. " * 5
+        assert looks_llm_formatted(text) is False
+
+    def test_rejects_bullets_only_without_bold(self) -> None:
+        text = "List of items:\n- Item one\n- Item two\n- Item three\n" * 3
+        assert looks_llm_formatted(text) is False
 

@@ -63,6 +63,7 @@ class Job(Base):
         Enum(JobStatus, native_enum=False), default=JobStatus.NEW
     )
     notes: Mapped[str] = mapped_column(Text, default="")
+    description_formatted: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Score(Base):

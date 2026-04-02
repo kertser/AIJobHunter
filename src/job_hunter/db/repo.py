@@ -127,6 +127,7 @@ def upsert_job(session: Session, job: Job, *, user_id: uuid.UUID | None = None) 
         updatable = (
             "title", "company", "location", "description_text",
             "easy_apply", "status", "notes", "external_id",
+            "description_formatted",
         )
         for attr in updatable:
             value = getattr(job, attr, None)

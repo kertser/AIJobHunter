@@ -108,6 +108,10 @@ def run_migrations(engine: Engine) -> None:
         if _add_column_if_missing(engine, "users", col_name, col_type):
             changes += 1
 
+    # ── v4: add description_formatted flag to jobs ──
+    if _add_column_if_missing(engine, "jobs", "description_formatted", "BOOLEAN"):
+        changes += 1
+
     if changes:
         logger.info("migration: applied %d change(s)", changes)
     else:

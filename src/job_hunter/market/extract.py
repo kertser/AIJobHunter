@@ -285,7 +285,7 @@ class FakeMarketExtractor(MarketExtractor):
 
 
 class OpenAIMarketExtractor(MarketExtractor):
-    """LLM-backed extractor using OpenAI structured output."""
+    """LLM-backed extractor using OpenAI-compatible API (real or local)."""
 
     version: str = "openai-1.0"
 
@@ -303,6 +303,8 @@ class OpenAIMarketExtractor(MarketExtractor):
         self.base_url = base_url
         self.temperature = temperature
         self.max_tokens = max_tokens
+        # Reflect the actual backend in the version tag
+        self.version = "local-llm-1.0" if base_url else "openai-1.0"
 
     def extract(self, inp: ExtractionInput) -> ExtractionResult:
         from openai import OpenAI

@@ -243,6 +243,47 @@ async def bulk_delete_jobs(body: BulkDelete, request: Request, session: Session 
     return {"deleted": deleted}
 
 
+@router.post("/api/jobs/bulk/skip-all")
+async def bulk_skip_all(request: Request, session: Session = Depends(get_db), status: str = ""):
+    """Set ALL jobs matching the filter to 'skipped' in one go."""
+    user_id = _get_user_id(request)
+    query = select(Job)
+    if user_id is not None:
+        query = query.where(Job.user_id == user_id)
+    if status:
+        try:
+            query = query.where(Job.status == JobStatus(status))
+        except ValueError:
+            pass
+    # Exclude already-skipped jobs
+    query = query.where(Job.status != JobStatus.SKIPPED)
+    jobs = session.execute(query).scalars().all()
+    for j in jobs:
+        j.status = JobStatus.SKIPPED
+    session.flush()
+    return {"updated": len(jobs)}
+
+
+@router.post("/api/jobs/bulk/delete-all")
+async def bulk_delete_all(request: Request, session: Session = Depends(get_db), status: str = ""):
+    """Delete ALL jobs matching the filter in one go."""
+    user_id = _get_user_id(request)
+    query = select(Job)
+    if user_id is not None:
+        query = query.where(Job.user_id == user_id)
+    if status:
+        try:
+            query = query.where(Job.status == JobStatus(status))
+        except ValueError:
+            pass
+    jobs = session.execute(query).scalars().all()
+    deleted = 0
+    for j in jobs:
+        if delete_job(session, j.hash, user_id=user_id):
+            deleted += 1
+    return {"deleted": deleted}
+
+
 # --- Single job endpoints ---
 
 @router.patch("/api/jobs/{job_hash}/status")
@@ -303,6 +344,7 @@ async def reformat_description(job_hash: str, request: Request, session: Session
         settings=eff,
     )
     job.description_text = cleaned
+    job.description_formatted = True
     session.flush()
     return {"hash": job.hash, "description_length": len(cleaned)}
 
