@@ -275,6 +275,195 @@ async def llm_container_logs(request: Request, tail: int = 80):
     return await _aio.to_thread(container_logs, tail=min(tail, 500))
 
 
+# ---------------------------------------------------------------------------
+# Small LLM model management
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/settings/models")
+async def list_available_models(request: Request):
+    """Return the registry of small LLM models with download status."""
+    from job_hunter.web.model_registry import get_models_dir, list_models
+    models_dir = get_models_dir()
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check which model file is currently the active symlink / model.gguf
+    active_file = models_dir / "model.gguf"
+    active_filename: str | None = None
+    if active_file.exists():
+        # If it's a symlink, resolve it to see which model it points to
+        try:
+            resolved = active_file.resolve()
+            active_filename = resolved.name
+        except Exception:
+            active_filename = "model.gguf"
+
+    models = list_models(models_dir)
+    for m in models:
+        m["active"] = (m["filename"] == active_filename) if active_filename else False
+    return {"models": models, "models_dir": str(models_dir)}
+
+
+@router.post("/api/settings/models/{model_id}/download")
+async def download_model(model_id: str, request: Request):
+    """Download a model GGUF file from HuggingFace as a background task."""
+    from job_hunter.web.model_registry import get_model_by_id, get_models_dir
+    from job_hunter.web.task_manager import TaskManager
+
+    model = get_model_by_id(model_id)
+    if not model:
+        return JSONResponse({"error": f"Unknown model: {model_id}"}, status_code=404)
+
+    models_dir = get_models_dir()
+    models_dir.mkdir(parents=True, exist_ok=True)
+    dest = models_dir / model["filename"]
+
+    if dest.exists():
+        return {"already_downloaded": True, "path": str(dest)}
+
+    tm: TaskManager = request.app.state.task_manager
+    if tm.is_running:
+        return JSONResponse({"error": "A task is already running"}, status_code=409)
+
+    url = model["url"]
+    filename = model["filename"]
+
+    async def _run():
+        import asyncio as _aio
+
+        def _download():
+            import urllib.request
+
+            logger.info("Downloading %s from %s …", filename, url)
+            logger.info("Destination: %s", dest)
+
+            req = urllib.request.Request(url, headers={"User-Agent": "AIJobHunter/1.0"})
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                total = int(resp.headers.get("Content-Length", 0))
+                total_mb = total / (1024 * 1024) if total else 0
+                downloaded = 0
+                last_pct = -1
+
+                with open(dest, "wb") as f:
+                    while True:
+                        chunk = resp.read(1024 * 1024)  # 1 MB chunks
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            pct = int(downloaded * 100 / total)
+                            if pct != last_pct and pct % 5 == 0:
+                                last_pct = pct
+                                logger.info(
+                                    "  %d%% — %.0f / %.0f MB",
+                                    pct, downloaded / (1024 * 1024), total_mb,
+                                )
+
+            logger.info("✓ Download complete: %s (%.0f MB)", filename, dest.stat().st_size / (1024 * 1024))
+
+        await _aio.to_thread(_download)
+        return {"downloaded": True, "filename": filename}
+
+    tm.start_task("model-download", _run())
+    return JSONResponse({"started": "model-download", "filename": filename}, status_code=202)
+
+
+@router.delete("/api/settings/models/{model_id}")
+async def delete_model(model_id: str, request: Request):
+    """Delete a downloaded model file."""
+    from job_hunter.web.model_registry import get_model_by_id, get_models_dir
+
+    model = get_model_by_id(model_id)
+    if not model:
+        return JSONResponse({"error": f"Unknown model: {model_id}"}, status_code=404)
+
+    models_dir = get_models_dir()
+    filepath = models_dir / model["filename"]
+
+    # Don't allow deleting the currently active model
+    active = models_dir / "model.gguf"
+    if active.exists():
+        try:
+            if active.resolve() == filepath.resolve():
+                return JSONResponse(
+                    {"error": "Cannot delete the active model. Activate another model first."},
+                    status_code=400,
+                )
+        except Exception:
+            pass
+
+    if filepath.exists():
+        filepath.unlink()
+        return {"deleted": True, "filename": model["filename"]}
+    return JSONResponse({"error": "File not found"}, status_code=404)
+
+
+@router.post("/api/settings/models/{model_id}/activate")
+async def activate_model(model_id: str, request: Request):
+    """Set a downloaded model as the active model.gguf for the LLM sidecar.
+
+    Creates a copy (or symlink on supported platforms) as ``model.gguf``.
+    Optionally restarts the LLM container if Docker is available.
+    """
+    import asyncio as _aio
+    import shutil
+
+    from job_hunter.web.model_registry import get_model_by_id, get_models_dir
+
+    model = get_model_by_id(model_id)
+    if not model:
+        return JSONResponse({"error": f"Unknown model: {model_id}"}, status_code=404)
+
+    models_dir = get_models_dir()
+    source = models_dir / model["filename"]
+
+    if not source.exists():
+        return JSONResponse(
+            {"error": f"Model not downloaded yet: {model['filename']}"},
+            status_code=400,
+        )
+
+    target = models_dir / "model.gguf"
+
+    # Remove existing model.gguf (symlink or real file)
+    if target.exists() or target.is_symlink():
+        target.unlink()
+
+    # Prefer symlink (saves disk space); fall back to copy on Windows if needed
+    try:
+        target.symlink_to(source)
+        method = "symlink"
+    except OSError:
+        shutil.copy2(source, target)
+        method = "copy"
+
+    logger.info("Activated model %s via %s → %s", model["filename"], method, target)
+
+    # Update local_llm_model setting
+    from job_hunter.web.deps import get_effective_settings
+    settings = get_effective_settings(request)
+    settings.local_llm_model = model["name"]
+
+    # Try to restart LLM container so it picks up the new model
+    restarted = False
+    try:
+        from job_hunter.web.docker_ctl import restart_container
+        result = await _aio.to_thread(restart_container)
+        if result.get("ok"):
+            restarted = True
+            logger.info("LLM container restarted for new model")
+    except Exception as exc:
+        logger.debug("Could not restart LLM container: %s", exc)
+
+    return {
+        "activated": True,
+        "filename": model["filename"],
+        "method": method,
+        "container_restarted": restarted,
+    }
+
+
 def _mask_key(key: str) -> str:
     if not key or len(key) < 8:
         return "not set" if not key else "****"

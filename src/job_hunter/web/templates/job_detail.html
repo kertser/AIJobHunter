@@ -120,8 +120,12 @@
 {% endif %}
 
 <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem;">
-  <h3 style="margin: 0;">Description</h3>
-  {% if job.description_text %}
+  <h3 style="margin: 0;">Description
+    {% if job.description_formatted %}
+    <kbd style="background: #dbeafe; color: #2563eb; font-size: 0.65rem; vertical-align: middle; margin-left: 0.4rem;">✨ AI formatted</kbd>
+    {% endif %}
+  </h3>
+  {% if job.description_text and not job.description_formatted %}
   <button class="outline action-btn" onclick="reformatDescription('{{ job.hash }}')" id="reformat-btn"
           title="Clean up and beautify description using AI">
     ✨ Reformat with AI
@@ -134,6 +138,23 @@
   <div class="job-description">{{ job.description_text | markdown }}</div>
   {% else %}
   <p style="color: var(--pico-muted-color);">No description available.</p>
+  {% endif %}
+</div>
+
+<!-- Bottom navigation (same as top) -->
+<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.2rem; padding: 0.5rem 0.8rem; background: var(--pico-card-background-color); border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+  {% if prev_hash %}
+  <a href="/api/jobs/{{ prev_hash }}" role="button" style="font-size: 0.85rem; padding: 0.35rem 1rem; background: var(--pico-primary); color: #fff; border: none; border-radius: 0.35rem; text-decoration: none;">← Prev</a>
+  {% else %}
+  <span style="display: inline-block; font-size: 0.85rem; padding: 0.35rem 1rem; background: #e5e7eb; color: #9ca3af; border-radius: 0.35rem; cursor: default;">← Prev</span>
+  {% endif %}
+
+  <a href="/jobs" style="font-size: 0.9rem; font-weight: 600; color: var(--pico-primary); text-decoration: none;">↑ Back to Jobs</a>
+
+  {% if next_hash %}
+  <a href="/api/jobs/{{ next_hash }}" role="button" style="font-size: 0.85rem; padding: 0.35rem 1rem; background: var(--pico-primary); color: #fff; border: none; border-radius: 0.35rem; text-decoration: none;">Next →</a>
+  {% else %}
+  <span style="display: inline-block; font-size: 0.85rem; padding: 0.35rem 1rem; background: #e5e7eb; color: #9ca3af; border-radius: 0.35rem; cursor: default;">Next →</span>
   {% endif %}
 </div>
 

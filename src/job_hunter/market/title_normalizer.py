@@ -226,7 +226,7 @@ class HeuristicTitleNormalizer(TitleNormalizer):
 
 
 class OpenAITitleNormalizer(TitleNormalizer):
-    """LLM-backed title normaliser using OpenAI."""
+    """LLM-backed title normaliser using OpenAI-compatible API (real or local)."""
 
     version: str = "openai-title-1.0"
 
@@ -247,6 +247,8 @@ class OpenAITitleNormalizer(TitleNormalizer):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self._cache: dict[str, str] = {}
+        # Reflect the actual backend in the version tag
+        self.version = "local-llm-title-1.0" if base_url else "openai-title-1.0"
 
     def normalize(self, title: str, *, company: str = "") -> str:
         if title in self._cache:

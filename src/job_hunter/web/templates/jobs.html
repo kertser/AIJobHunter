@@ -25,6 +25,10 @@
   <span id="selection-count" style="color: var(--pico-muted-color); font-size: 0.85rem; display: none;">
     <strong id="selected-num">0</strong> selected
   </span>
+  <span style="flex: 1;"></span>
+  <button class="action-btn outline secondary" onclick="skipAllFiltered()" style="width: auto; font-size: 0.82rem; padding: 0.35rem 0.8rem;">⏭ Skip All</button>
+  <button class="action-btn outline" style="width: auto; font-size: 0.82rem; padding: 0.35rem 0.8rem; color: var(--pico-del-color); border-color: var(--pico-del-color);"
+          onclick="deleteAllFiltered()">🗑 Delete All</button>
 </div>
 
 <!-- Mass action toolbar (hidden until selection) -->
@@ -352,6 +356,43 @@ function deleteJob(hash) {
       }
     })
     .catch(function(e) { showToast('Delete error: ' + e); });
+}
+
+// --- Bulk all (entire filter, not just selection) ---
+function skipAllFiltered() {
+  var statusFilter = document.getElementById('filter-status').value;
+  var label = statusFilter ? '"' + statusFilter + '"' : 'all';
+  if (!confirm('Mark ALL ' + label + ' jobs ({{ total_count }} total) as skipped?')) return;
+  fetch('/api/jobs/bulk/skip-all?status=' + encodeURIComponent(statusFilter), {
+    method: 'POST',
+  }).then(function(r) {
+    return r.json().then(function(data) {
+      if (r.ok) {
+        showToast(data.updated + ' job(s) marked as skipped');
+        setTimeout(function() { location.reload(); }, 600);
+      } else {
+        showToast('Error: ' + (data.detail || 'skip all failed'));
+      }
+    });
+  }).catch(function(e) { showToast('Error: ' + e); });
+}
+
+function deleteAllFiltered() {
+  var statusFilter = document.getElementById('filter-status').value;
+  var label = statusFilter ? '"' + statusFilter + '"' : 'all';
+  if (!confirm('⚠️ Permanently delete ALL ' + label + ' jobs ({{ total_count }} total)?\n\nThis cannot be undone!')) return;
+  fetch('/api/jobs/bulk/delete-all?status=' + encodeURIComponent(statusFilter), {
+    method: 'POST',
+  }).then(function(r) {
+    return r.json().then(function(data) {
+      if (r.ok) {
+        showToast(data.deleted + ' job(s) deleted');
+        setTimeout(function() { location.reload(); }, 600);
+      } else {
+        showToast('Error: ' + (data.detail || 'delete all failed'));
+      }
+    });
+  }).catch(function(e) { showToast('Error: ' + e); });
 }
 </script>
 {% endblock %}

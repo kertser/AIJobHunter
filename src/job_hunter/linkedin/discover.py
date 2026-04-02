@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from job_hunter.linkedin.parse import parse_job_cards, parse_job_detail
-from job_hunter.matching.description_cleaner import clean_description_llm, clean_description_rules
+from job_hunter.matching.description_cleaner import clean_description_llm, clean_description_rules, looks_llm_formatted
 from job_hunter.utils.hashing import job_hash
 
 logger = logging.getLogger("job_hunter.linkedin.discover")
@@ -845,6 +845,7 @@ async def _discover_real(
                         )
                     else:
                         cleaned_desc = clean_description_rules(raw_desc)
+                    desc_formatted = looks_llm_formatted(cleaned_desc)
 
                     posted_at_text = detail.get("posted_at_text", "")
                     posted_at = _parse_relative_date(posted_at_text)
@@ -858,6 +859,7 @@ async def _discover_real(
                         "company": detail.get("company") or card.get("company", ""),
                         "location": detail.get("location") or card.get("location", ""),
                         "description_text": cleaned_desc,
+                        "description_formatted": desc_formatted,
                         "easy_apply": detail.get("easy_apply", False),
                         "posted_at": posted_at,
                         "source": "linkedin",

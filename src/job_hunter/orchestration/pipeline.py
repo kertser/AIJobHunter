@@ -111,6 +111,36 @@ async def run_pipeline(
 
     # --- Phase 2: Score ---
     logger.info("Pipeline step 2/4: Score")
+
+    # ── Auto-reformat unformatted descriptions with AI ──
+    from job_hunter.matching.description_cleaner import clean_description_llm, looks_llm_formatted
+    from sqlalchemy import select
+
+    reformat_q = select(Job).where(
+        Job.description_formatted.is_(False) | Job.description_formatted.is_(None),
+        Job.description_text != "",
+        Job.description_text.isnot(None),
+    )
+    unformatted = session.execute(reformat_q).scalars().all()
+    if unformatted:
+        logger.info("Reformatting %d job description(s) with AI…", len(unformatted))
+        reformatted = 0
+        for uj in unformatted:
+            try:
+                cleaned = clean_description_llm(
+                    uj.description_text, openai_api_key, settings=settings,
+                )
+                if looks_llm_formatted(cleaned):
+                    uj.description_text = cleaned
+                    uj.description_formatted = True
+                    reformatted += 1
+                else:
+                    uj.description_formatted = True
+            except Exception as exc:
+                logger.warning("Reformat failed for %s: %s", uj.title, exc)
+        session.commit()
+        logger.info("Reformatted %d/%d descriptions", reformatted, len(unformatted))
+
     embedder: Embedder
     evaluator: LLMEvaluator
 

@@ -89,7 +89,8 @@ def run_market_pipeline(
     )
 
     # --- Step 5: Role model ---
-    logger.info("━━━ Step 5/%d: 🎭 Role model — deriving role archetypes", total_steps)
+    _norm_label = title_normalizer.version if title_normalizer else "legacy"
+    logger.info("━━━ Step 5/%d: 🎭 Role model — deriving role archetypes (%s)", total_steps, _norm_label)
     from job_hunter.market.role_model import build_role_archetypes
 
     role_result = build_role_archetypes(session, title_normalizer=title_normalizer)

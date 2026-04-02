@@ -245,9 +245,42 @@ async def run_score(request: Request):
                     max_tokens=tp.max_tokens,
                 )
 
-            # Find all jobs that don't have a Score record yet (scoped to user)
+            # ── Auto-reformat unformatted descriptions with AI ──
             from sqlalchemy import select
             from job_hunter.db.models import Job
+            from job_hunter.matching.description_cleaner import clean_description_llm, looks_llm_formatted
+
+            reformat_q = select(Job).where(
+                Job.description_formatted.is_(False) | Job.description_formatted.is_(None),
+                Job.description_text != "",
+                Job.description_text.isnot(None),
+            )
+            if captured_user_id is not None:
+                reformat_q = reformat_q.where(Job.user_id == captured_user_id)
+            unformatted = session.execute(reformat_q).scalars().all()
+
+            if unformatted:
+                logger.info("Reformatting %d job description(s) with AI before scoring…", len(unformatted))
+                reformatted = 0
+                for uj in unformatted:
+                    try:
+                        cleaned = clean_description_llm(
+                            uj.description_text, settings=settings,
+                        )
+                        if looks_llm_formatted(cleaned):
+                            uj.description_text = cleaned
+                            uj.description_formatted = True
+                            reformatted += 1
+                        else:
+                            # LLM unavailable or failed — mark as attempted
+                            # so we don't retry rule-based results every run
+                            uj.description_formatted = True
+                    except Exception as exc:
+                        logger.warning("Reformat failed for %s: %s", uj.title, exc)
+                session.commit()
+                logger.info("Reformatted %d/%d descriptions", reformatted, len(unformatted))
+
+            # Find all jobs that don't have a Score record yet (scoped to user)
             job_q = select(Job)
             if captured_user_id is not None:
                 job_q = job_q.where(Job.user_id == captured_user_id)

@@ -113,24 +113,26 @@
         </label>
       </div>
       <button type="button" id="btn-check-llm" class="outline" style="margin-top: 0.3rem;">🔍 Check Connection</button>
+
+      <!-- 📦 Model Selector -->
+      <div style="margin-top: 1rem; padding: 0.8rem 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px; background: rgba(0,0,0,0.02);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
+          <span style="font-weight: 600; font-size: 0.92rem;">📦 Available Models <small style="color: var(--pico-muted-color);">(≤3B, GGUF)</small></span>
+          <button type="button" onclick="refreshModelList()" class="outline secondary" style="width: auto; font-size: 0.72rem; padding: 0.15rem 0.5rem;">↻ Refresh</button>
+        </div>
+        <div id="model-list" style="font-size: 0.84rem;">
+          <em style="color: var(--pico-muted-color);">Loading models…</em>
+        </div>
+        <div id="model-download-progress" style="display: none; margin-top: 0.6rem; padding: 0.5rem 0.7rem; border-radius: 6px; background: #f0f9ff; font-size: 0.82rem; font-family: monospace; max-height: 120px; overflow-y: auto; white-space: pre-wrap;">
+        </div>
+      </div>
+
       <details style="margin-top: 0.8rem;">
-        <summary style="font-size: 0.84rem; cursor: pointer;">Setup instructions</summary>
+        <summary style="font-size: 0.84rem; cursor: pointer;">Advanced: manual model override</summary>
         <div style="font-size: 0.84rem; color: var(--pico-muted-color); line-height: 1.6; margin-top: 0.5rem;">
-          <ol style="padding-left: 1.2rem;">
-            <li>Download a GGUF model: <code>.\scripts\download_model.ps1</code> (Windows) or <code>./scripts/download_model.sh</code> (Linux/Mac)</li>
-            <li>The LLM container starts automatically with deployment. Use the controls above to manage it.</li>
-            <li>Click "Check Connection" above to verify</li>
-          </ol>
-          <p style="margin-top: 0.5rem;"><strong>Recommended models:</strong></p>
-          <table style="font-size: 0.8rem;">
-            <tr><th>Model</th><th>Size</th><th>Quality</th></tr>
-            <tr><td>Llama-3.2-1B-Instruct-Q4_K_S</td><td>~700 MB</td><td>Basic (fast)</td></tr>
-            <tr><td>Llama-3.2-3B-Instruct-Q4_K_M</td><td>~1.8 GB</td><td>Good (default)</td></tr>
-            <tr><td>Phi-3.5-mini-Q4_K_M</td><td>~2.2 GB</td><td>Good (128K context)</td></tr>
-            <tr><td>Mistral-7B-Instruct-Q4_K_M</td><td>~4.4 GB</td><td>Great (slow)</td></tr>
-          </table>
-          <p>For reliable JSON output (scoring, profiles), 3B+ models are recommended.</p>
-          <p>OpenAI API key is still optional — if set, it will be used for <strong>embeddings only</strong> (local models produce poor embeddings).</p>
+          <p>If you have a custom GGUF model, place it in the <code>models/</code> directory and enter its name below.
+          You can also point to a different server URL if running llama-cpp-python separately.</p>
+          <p>For the model selector above, click <strong>Download</strong> on any model, then <strong>Activate</strong> to set it as the active model.</p>
         </div>
       </details>
     </div>
@@ -769,7 +771,7 @@
       var isLocal = sel.value === 'local';
       document.getElementById('openai-settings').style.display = isLocal ? 'none' : '';
       document.getElementById('local-llm-settings').style.display = isLocal ? '' : 'none';
-      if (isLocal) { checkLlmStatus(); refreshLlmContainerStatus(); }
+      if (isLocal) { checkLlmStatus(); refreshLlmContainerStatus(); refreshModelList(); }
     });
   })();
 
@@ -799,6 +801,146 @@
   if (document.getElementById('llm-provider-select') && document.getElementById('llm-provider-select').value === 'local') {
     checkLlmStatus();
     refreshLlmContainerStatus();
+    refreshModelList();
+  }
+
+  /* ── LLM Model Selector ─────────────────────────── */
+  function refreshModelList() {
+    var container = document.getElementById('model-list');
+    container.innerHTML = '<em style="color: var(--pico-muted-color);">Loading…</em>';
+    fetch('/api/settings/models')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var models = data.models || [];
+        if (!models.length) {
+          container.innerHTML = '<em>No models in registry.</em>';
+          return;
+        }
+        var html = '<table style="font-size: 0.82rem; margin: 0;"><thead><tr>'
+          + '<th>Model</th><th>Params</th><th>Size</th><th>Context</th><th>Quality</th><th>Status</th><th style="text-align: right;">Actions</th>'
+          + '</tr></thead><tbody>';
+        models.forEach(function(m) {
+          var statusBadge = '';
+          if (m.active) {
+            statusBadge = '<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:10px;font-size:0.72rem;font-weight:600;">✓ Active</span>';
+          } else if (m.downloaded) {
+            statusBadge = '<span style="background:#dbeafe;color:#2563eb;padding:2px 8px;border-radius:10px;font-size:0.72rem;font-weight:600;">Downloaded</span>';
+          } else {
+            statusBadge = '<span style="background:#f3f4f6;color:#6b7280;padding:2px 8px;border-radius:10px;font-size:0.72rem;">Not downloaded</span>';
+          }
+          var actions = '';
+          if (!m.downloaded) {
+            actions = '<button type="button" onclick="downloadModel(\'' + m.id + '\')" class="outline" style="width:auto;font-size:0.72rem;padding:0.2rem 0.5rem;">⬇ Download</button>';
+          } else if (!m.active) {
+            actions = '<button type="button" onclick="activateModel(\'' + m.id + '\')" style="width:auto;font-size:0.72rem;padding:0.2rem 0.5rem;background:#22c55e;border-color:#22c55e;color:#fff;">⚡ Activate</button>'
+              + ' <button type="button" onclick="deleteModel(\'' + m.id + '\', \'' + m.name + '\')" class="outline secondary" style="width:auto;font-size:0.72rem;padding:0.2rem 0.5rem;">🗑</button>';
+          } else {
+            actions = '<span style="color: var(--pico-muted-color); font-size: 0.78rem;">in use</span>';
+          }
+          var sizeTxt = m.downloaded && m.actual_size_mb ? '~' + m.actual_size_mb + ' MB' : '~' + m.size_mb + ' MB';
+          html += '<tr>'
+            + '<td title="' + (m.description || '') + '"><strong>' + m.name + '</strong></td>'
+            + '<td>' + m.params + '</td>'
+            + '<td>' + sizeTxt + '</td>'
+            + '<td>' + (m.context || '') + '</td>'
+            + '<td>' + (m.quality || '') + '</td>'
+            + '<td>' + statusBadge + '</td>'
+            + '<td style="text-align:right;white-space:nowrap;">' + actions + '</td>'
+            + '</tr>';
+        });
+        html += '</tbody></table>';
+        html += '<p style="margin:0.5rem 0 0;font-size:0.78rem;color:var(--pico-muted-color);">For reliable JSON output (scoring, market analysis), 3B models are recommended.</p>';
+        container.innerHTML = html;
+      })
+      .catch(function(err) {
+        container.innerHTML = '<em style="color:#dc2626;">Error loading models: ' + err + '</em>';
+      });
+  }
+
+  var _modelDownloadSSE = null;
+
+  function downloadModel(modelId) {
+    var progress = document.getElementById('model-download-progress');
+    progress.style.display = '';
+    progress.textContent = 'Starting download…\n';
+
+    // Start SSE listener for progress
+    if (_modelDownloadSSE) _modelDownloadSSE.close();
+    _modelDownloadSSE = new EventSource('/api/run/status');
+    _modelDownloadSSE.addEventListener('progress', function(e) {
+      progress.textContent += e.data + '\n';
+      progress.scrollTop = progress.scrollHeight;
+    });
+    _modelDownloadSSE.addEventListener('complete', function(e) {
+      progress.textContent += e.data + '\n';
+      _modelDownloadSSE.close();
+      _modelDownloadSSE = null;
+      showToast('✅ Model downloaded!');
+      refreshModelList();
+    });
+    _modelDownloadSSE.addEventListener('task_error', function(e) {
+      progress.textContent += '❌ ' + e.data + '\n';
+      _modelDownloadSSE.close();
+      _modelDownloadSSE = null;
+      showToast('❌ Download failed');
+      refreshModelList();
+    });
+
+    fetch('/api/settings/models/' + modelId + '/download', { method: 'POST' })
+      .then(function(r) {
+        return r.json().then(function(data) {
+          if (data.already_downloaded) {
+            progress.textContent += 'Already downloaded!\n';
+            if (_modelDownloadSSE) { _modelDownloadSSE.close(); _modelDownloadSSE = null; }
+            refreshModelList();
+          } else if (!r.ok && !data.started) {
+            progress.textContent += '❌ ' + (data.error || 'Failed') + '\n';
+            if (_modelDownloadSSE) { _modelDownloadSSE.close(); _modelDownloadSSE = null; }
+          }
+        });
+      })
+      .catch(function(err) {
+        progress.textContent += 'Error: ' + err + '\n';
+        if (_modelDownloadSSE) { _modelDownloadSSE.close(); _modelDownloadSSE = null; }
+      });
+  }
+
+  function activateModel(modelId) {
+    fetch('/api/settings/models/' + modelId + '/activate', { method: 'POST' })
+      .then(function(r) {
+        return r.json().then(function(data) {
+          if (r.ok) {
+            var msg = '✅ Model activated!';
+            if (data.container_restarted) msg += ' LLM container restarting…';
+            showToast(msg);
+            refreshModelList();
+            if (data.container_restarted) {
+              _startLlmPoll();
+            }
+            // Refresh connection status after a delay
+            setTimeout(checkLlmStatus, 5000);
+          } else {
+            showToast('❌ ' + (data.error || 'Activation failed'));
+          }
+        });
+      })
+      .catch(function(err) { showToast('Error: ' + err); });
+  }
+
+  function deleteModel(modelId, modelName) {
+    if (!confirm('Delete downloaded model "' + modelName + '"? The file will be removed from disk.')) return;
+    fetch('/api/settings/models/' + modelId, { method: 'DELETE' })
+      .then(function(r) {
+        return r.json().then(function(data) {
+          if (r.ok) {
+            showToast('Model deleted');
+            refreshModelList();
+          } else {
+            showToast('❌ ' + (data.error || 'Delete failed'));
+          }
+        });
+      })
+      .catch(function(err) { showToast('Error: ' + err); });
   }
 
   /* ── LLM Container Management ──────────────────── */

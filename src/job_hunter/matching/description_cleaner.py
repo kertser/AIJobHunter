@@ -106,6 +106,19 @@ def clean_description_rules(raw: str) -> str:
     return text
 
 
+def looks_llm_formatted(text: str) -> bool:
+    """Heuristic: return *True* when *text* appears to be LLM-formatted Markdown.
+
+    The LLM formatter produces bold (**…**) headings and bullet lists (``- ``).
+    Rule-based cleaning never adds those, so their presence is a reliable signal.
+    """
+    if not text or len(text) < 80:
+        return False
+    has_bold = "**" in text
+    has_bullets = "\n- " in text or text.startswith("- ")
+    return has_bold and has_bullets
+
+
 # ---------------------------------------------------------------------------
 # LLM-based description formatting
 # ---------------------------------------------------------------------------
