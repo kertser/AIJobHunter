@@ -14,7 +14,7 @@ Two pipelines sharing one SQLite DB:
 ### Core Packages
 
 - **config/** — `AppSettings` (Pydantic Settings, env prefix `JOBHUNTER_`, reads `.env`), `SearchProfile`, `UserProfile`, `ScheduleConfig`, `ScheduleRunRecord`, `PipelineMode` as Pydantic models; `LLMTaskConfig` for per-task inference overrides; YAML loader/saver in `loader.py`; `save_settings_env()` persists settings to `.env` via `python-dotenv` `set_key()`; `llm_provider` (`"openai"` or `"local"`), `local_llm_url` (default `http://localhost:8080/v1`), `local_llm_model`, `llm_temperature` (default 0.2), `llm_max_tokens` (default 0 = no limit), `llm_task_overrides` (per-task temperature/max_tokens presets) settings for routing LLM calls to a local llama-cpp-python sidecar
-- **db/** — SQLAlchemy 2.0 ORM (`Job`, `Score`, `ApplicationAttempt`) over SQLite with WAL mode; all three tables carry optional `user_id` FK to `users` for multi-user data isolation; `Job` has `source` (default `"linkedin"`) and `notes` fields; `Score` has `resume_id`; `repo.py` has all CRUD helpers; dedup via SHA-256 hash (`utils/hashing.py`); `migrations.py` is a stub for future Alembic integration
+- **db/** — SQLAlchemy 2.0 ORM (`Job`, `Score`, `ApplicationAttempt`) over SQLite with WAL mode; all three tables carry optional `user_id` FK to `users` for multi-user data isolation; `Job` has `source` (default `"linkedin"`) and `notes` fields; `Score` has `resume_id`; `repo.py` has all CRUD helpers; dedup via SHA-256 hash (`utils/hashing.py`); `migrations.py` has idempotent `run_migrations()` applying `ALTER TABLE ADD COLUMN` for schema evolution (v2: `user_id` on core tables; v3: per-user settings columns on `users`)
 - **linkedin/** — Playwright browser automation: `session.py` (cookie auth + `remote_login()` for headless/Docker programmatic login with verification code support and checkpoint screenshot streaming + `solve_captcha_interactively()` standalone helper for interactive CAPTCHA solving during discovery/apply), `discover.py` (search + pagination with comprehensive anti-detection: organic warm-up browsing, human-like mouse/scroll simulation, variable delays, referer headers, cookie refresh; optional `captcha_handler` callback for interactive CAPTCHA solving via web UI), `parse.py` (HTML→data), `apply.py` (Easy Apply wizard), `forms.py`/`form_filler_llm.py` (LLM-powered form filling), `selectors.py` (CSS/XPath constants)
 - **matching/** — `embeddings.py` (OpenAI embeddings + cosine similarity; `base_url` param for local provider), `llm_eval.py` (GPT/local LLM fit evaluation returning structured JSON; `base_url` param + `safe_json_parse` for local model tolerance), `scoring.py` (combines both into a decision; `compute_market_boost()` enriches scores with market opportunity signals when market data exists), `description_cleaner.py`
 - **orchestration/** — `pipeline.py` (async `run_pipeline()` wiring all stages), `policies.py` (rate limits, blacklists, daily caps)
@@ -178,7 +178,8 @@ All contents of `data/` except `.gitkeep` are gitignored (including `data/users/
 
 ```bash
 chmod +x deploy.sh
-./deploy.sh          # stop → prune → git pull → build → run on port 80
+./deploy.sh              # app only — stop → pull → build → run on port 80
+./deploy.sh --with-llm   # app + local LLM sidecar (auto-downloads model if missing)
 ```
 
 See also `docker-compose.yml` for compose-based deployment (works on all platforms) and `Dockerfile` for the image definition.
