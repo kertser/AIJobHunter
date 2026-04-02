@@ -71,6 +71,7 @@ async def discover_jobs(
     max_pages: int = 10,
     openai_api_key: str = "",
     captcha_handler: Any | None = None,
+    settings: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Discover jobs matching the given profile.
 
@@ -83,6 +84,10 @@ async def discover_jobs(
     solve the challenge interactively (e.g. via screenshot streaming + remote
     clicks) and return ``True`` if the challenge was cleared.  When ``None``,
     the original error-raising behaviour is preserved.
+
+    *settings* is an optional ``AppSettings`` instance.  When provided it is
+    forwarded to the description cleaner so that ``llm_provider="local"``
+    is respected.
 
     Returns a list of dicts, each containing all fields needed to create
     a ``Job`` DB row.
@@ -101,6 +106,7 @@ async def discover_jobs(
         max_pages=max_pages,
         openai_api_key=openai_api_key,
         captcha_handler=captcha_handler,
+        settings=settings,
     )
 
 
@@ -467,6 +473,7 @@ async def _discover_real(
     max_pages: int = 10,
     openai_api_key: str = "",
     captcha_handler: Any | None = None,
+    settings: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Run discovery against real LinkedIn using saved cookies.
 
@@ -832,8 +839,10 @@ async def _discover_real(
                         logger.warning("Failed to fetch detail for %s: %s", ext_id, exc)
 
                     raw_desc = detail.get("description_text", "")
-                    if openai_api_key and raw_desc:
-                        cleaned_desc = clean_description_llm(raw_desc, openai_api_key)
+                    if (openai_api_key or settings) and raw_desc:
+                        cleaned_desc = clean_description_llm(
+                            raw_desc, openai_api_key, settings=settings,
+                        )
                     else:
                         cleaned_desc = clean_description_rules(raw_desc)
 

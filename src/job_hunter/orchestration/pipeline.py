@@ -100,6 +100,7 @@ async def run_pipeline(
         remote=remote,
         seniority=seniority,
         captcha_handler=captcha_handler,
+        settings=settings,
     )
     for jd in job_dicts:
         job = Job(**jd)

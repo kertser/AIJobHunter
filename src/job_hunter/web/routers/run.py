@@ -161,6 +161,7 @@ async def run_discover(request: Request):
                 seniority=params.get("seniority"),
                 openai_api_key=params.get("openai_api_key", ""),
                 captcha_handler=_captcha_handler,
+                settings=settings,
             )
             logger.info("Discover returned %d jobs", len(job_dicts))
             if not job_dicts:
