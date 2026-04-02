@@ -30,15 +30,16 @@ WORKDIR /app
 VOLUME ["/models"]
 
 # Default config path — override by bind-mounting your own file
+# Config file uses the models[] array format (llama-cpp-python 0.3+)
 COPY config/llm_server.json /app/config/llm_server.json
 ENV LLM_CONFIG=/app/config/llm_server.json
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
     CMD curl -sf http://localhost:8080/v1/models || exit 1
 
-# Use the built-in OpenAI-compatible server with a config file
+# host/port are CLI args (not in config file for llama-cpp-python 0.3+)
 ENTRYPOINT ["sh", "-c", \
-    "python -m llama_cpp.server --config_file $LLM_CONFIG"]
+    "python -m llama_cpp.server --config_file $LLM_CONFIG --host 0.0.0.0 --port 8080"]
 
