@@ -19,6 +19,12 @@ The candidate may also provide industry preferences:
 - Preferred industries: industries they want to work in (boost score)
 - Disliked industries: industries they want to avoid (penalise score, add risk flag)
 
+IMPORTANT industry matching rules:
+- Treat related terms as equivalent (e.g. "medical" = "healthcare", "tech" = "technology")
+- ONLY flag "disliked industry" if the job's industry clearly matches one of the EXPLICITLY listed disliked industries
+- NEVER flag an industry as disliked if it matches or is closely related to a PREFERRED industry
+- When in doubt, do NOT add "disliked industry" — prefer false negatives over false positives
+
 Return ONLY a JSON object with these exact keys:
 
 {
@@ -33,8 +39,8 @@ Scoring guidelines:
 - 70-84:  Good match — candidate meets most requirements, minor gaps
 - 50-69:  Partial match — significant skill gaps but transferable experience
 - 0-49:   Poor match — major misalignment
-- If the job is in a DISLIKED industry, reduce the score by 15-25 points and add "disliked industry" to risk_flags
-- If the job is in a PREFERRED industry, add 5-10 bonus points (capped at 100)
+- If the job is in a DISLIKED industry (explicitly listed), reduce the score by 15-25 points and add "disliked industry" to risk_flags
+- If the job is in a PREFERRED industry (or a closely related field), add 5-10 bonus points (capped at 100)
 
 Decision guidelines:
 - "apply": fit_score >= 70 and no critical risk flags
@@ -104,9 +110,11 @@ class OpenAILLMEvaluator(LLMEvaluator):
             pref = user_preferences
             pref_lines = []
             if pref.get("preferred_industries"):
-                pref_lines.append(f"Preferred industries: {', '.join(pref['preferred_industries'])}")
+                pref_lines.append(f"Preferred industries (BOOST score, NEVER flag as disliked): {', '.join(pref['preferred_industries'])}")
             if pref.get("disliked_industries"):
-                pref_lines.append(f"Disliked industries (penalise): {', '.join(pref['disliked_industries'])}")
+                pref_lines.append(f"Disliked industries (ONLY these should be penalised): {', '.join(pref['disliked_industries'])}")
+            else:
+                pref_lines.append("Disliked industries: NONE — do not add 'disliked industry' to risk_flags")
             if pref_lines:
                 user_message += f"\n\n=== CANDIDATE PREFERENCES ===\n" + "\n".join(pref_lines)
 
