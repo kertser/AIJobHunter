@@ -304,6 +304,14 @@ class TestSettings:
         data = r.json()
         assert "ok" in data or "error" in data
 
+    def test_llm_container_logs_without_docker(self, client: TestClient) -> None:
+        """Logs endpoint handles missing Docker gracefully."""
+        r = client.get("/api/settings/llm-container/logs")
+        assert r.status_code == 200
+        data = r.json()
+        assert "available" in data
+        assert "logs" in data
+
 
 # ---------------------------------------------------------------------------
 # Run controls

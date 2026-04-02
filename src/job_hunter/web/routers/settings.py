@@ -266,6 +266,14 @@ async def llm_container_restart(request: Request):
     return result
 
 
+@router.get("/api/settings/llm-container/logs")
+async def llm_container_logs(request: Request, tail: int = 80):
+    """Fetch recent log lines from the LLM sidecar container."""
+    import asyncio as _aio
+    from job_hunter.web.docker_ctl import container_logs
+    return await _aio.to_thread(container_logs, tail=min(tail, 500))
+
+
 def _mask_key(key: str) -> str:
     if not key or len(key) < 8:
         return "not set" if not key else "****"

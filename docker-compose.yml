@@ -42,11 +42,16 @@ services:
       - ./config/llm_server.json:/app/config/llm_server.json:ro
     ports:
       - "8080:8080"
+    # IPC_LOCK needed for use_mlock in llm_server.json (pins model in RAM)
+    cap_add:
+      - IPC_LOCK
+    # Shared memory for large model inference
+    shm_size: "512m"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/models"]
       interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s    # model loading can take 1-2 min on first start
 

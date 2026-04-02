@@ -179,6 +179,32 @@ def restart_container(name: str = LLM_CONTAINER_NAME) -> dict[str, Any]:
             pass
 
 
+def container_logs(name: str = LLM_CONTAINER_NAME, tail: int = 80) -> dict[str, Any]:
+    """Fetch recent log lines from the LLM sidecar container.
+
+    Returns ``{"available": True, "logs": "…"}`` on success.
+    """
+    client = _get_client()
+    if client is None:
+        return {"available": False, "logs": "", "error": "Docker not available"}
+    try:
+        container = client.containers.get(name)
+        raw = container.logs(tail=tail, timestamps=False)
+        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+        return {"available": True, "logs": text, "error": None}
+    except Exception as exc:
+        return {
+            "available": True,
+            "logs": "",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
 
 
 
