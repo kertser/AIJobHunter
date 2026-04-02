@@ -130,5 +130,13 @@ def run_market_pipeline(
         summary["matches"] = 0
 
     logger.info("✅ Market pipeline complete — %d steps finished", total_steps)
+
+    # Invalidate market boost cache so job detail pages pick up fresh data
+    try:
+        from job_hunter.matching.scoring import invalidate_market_boost_cache
+        invalidate_market_boost_cache()
+    except Exception:
+        pass
+
     return summary
 

@@ -98,6 +98,49 @@
   </tbody>
 </table>
 </div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<nav style="display: flex; justify-content: center; align-items: center; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap;">
+  {% if page > 1 %}
+  <a href="/jobs?status={{ current_status }}&page={{ page - 1 }}&per_page={{ per_page }}" role="button" class="outline" style="padding: 0.3rem 0.8rem; font-size: 0.85rem;">← Prev</a>
+  {% else %}
+  <span style="padding: 0.3rem 0.8rem; font-size: 0.85rem; opacity: 0.4;">← Prev</span>
+  {% endif %}
+
+  {% set start_page = [1, page - 2] | max %}
+  {% set end_page = [total_pages, page + 2] | min %}
+  {% if start_page > 1 %}
+  <a href="/jobs?status={{ current_status }}&page=1&per_page={{ per_page }}" style="padding: 0.3rem 0.6rem; font-size: 0.85rem;">1</a>
+  {% if start_page > 2 %}<span style="color: var(--pico-muted-color);">…</span>{% endif %}
+  {% endif %}
+  {% for p in range(start_page, end_page + 1) %}
+  {% if p == page %}
+  <strong style="padding: 0.3rem 0.6rem; font-size: 0.85rem; background: var(--pico-primary); color: #fff; border-radius: 0.3rem;">{{ p }}</strong>
+  {% else %}
+  <a href="/jobs?status={{ current_status }}&page={{ p }}&per_page={{ per_page }}" style="padding: 0.3rem 0.6rem; font-size: 0.85rem;">{{ p }}</a>
+  {% endif %}
+  {% endfor %}
+  {% if end_page < total_pages %}
+  {% if end_page < total_pages - 1 %}<span style="color: var(--pico-muted-color);">…</span>{% endif %}
+  <a href="/jobs?status={{ current_status }}&page={{ total_pages }}&per_page={{ per_page }}" style="padding: 0.3rem 0.6rem; font-size: 0.85rem;">{{ total_pages }}</a>
+  {% endif %}
+
+  {% if page < total_pages %}
+  <a href="/jobs?status={{ current_status }}&page={{ page + 1 }}&per_page={{ per_page }}" role="button" class="outline" style="padding: 0.3rem 0.8rem; font-size: 0.85rem;">Next →</a>
+  {% else %}
+  <span style="padding: 0.3rem 0.8rem; font-size: 0.85rem; opacity: 0.4;">Next →</span>
+  {% endif %}
+</nav>
+{% endif %}
+
+<p style="text-align: center; font-size: 0.82rem; color: var(--pico-muted-color); margin-top: 0.5rem;">
+  {% if total_count > 0 %}
+  Showing {{ (page - 1) * per_page + 1 }}–{{ [page * per_page, total_count] | min }} of {{ total_count }} jobs
+  {% else %}
+  No jobs found
+  {% endif %}
+</p>
 {% endblock %}
 
 {% block extra_scripts %}

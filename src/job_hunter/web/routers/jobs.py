@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from job_hunter.db.models import ApplicationAttempt, ApplicationResult, Job, JobStatus, Score
@@ -48,18 +48,42 @@ def _get_applied_map(session: Session, hashes: list[str], *, user_id: uuid.UUID 
 
 
 @router.get("/jobs")
-async def jobs_page(request: Request, session: Session = Depends(get_db), status: str = ""):
+async def jobs_page(
+    request: Request,
+    session: Session = Depends(get_db),
+    status: str = "",
+    page: int = 1,
+    per_page: int = 50,
+):
     user_id = _get_user_id(request)
     templates = request.app.state.templates
-    query = select(Job).order_by(Job.collected_at.desc())
+
+    # Clamp page
+    if page < 1:
+        page = 1
+
+    # Base filter
+    base_query = select(Job)
     if user_id is not None:
-        query = query.where(Job.user_id == user_id)
+        base_query = base_query.where(Job.user_id == user_id)
     if status:
         try:
-            query = query.where(Job.status == JobStatus(status))
+            base_query = base_query.where(Job.status == JobStatus(status))
         except ValueError:
             pass
+
+    # Total count
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total_count = session.execute(count_query).scalar() or 0
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    if page > total_pages:
+        page = total_pages
+
+    # Paginated rows
+    query = base_query.order_by(Job.collected_at.desc())
+    query = query.offset((page - 1) * per_page).limit(per_page)
     jobs = session.execute(query).scalars().all()
+
     hashes = [j.hash for j in jobs]
     scores_map = get_scores_for_jobs(session, hashes, user_id=user_id)
     applied_map = _get_applied_map(session, hashes, user_id=user_id)
@@ -68,6 +92,8 @@ async def jobs_page(request: Request, session: Session = Depends(get_db), status
     return templates.TemplateResponse(request, "jobs.html", {
         "jobs": jobs, "scores_map": scores_map, "applied_map": applied_map,
         "statuses": statuses, "current_status": status,
+        "page": page, "per_page": per_page,
+        "total_pages": total_pages, "total_count": total_count,
     })
 
 

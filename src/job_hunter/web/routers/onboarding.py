@@ -60,7 +60,8 @@ async def generate_profiles(
             from job_hunter.db.repo import make_session
             session = make_session(request.app.state.engine)
             try:
-                update_user_settings(session, user.id, openai_api_key=submitted_key)
+                secret_key = getattr(request.app.state, "secret_key", "") or ""
+                update_user_settings(session, user.id, secret_key=secret_key, openai_api_key=submitted_key)
                 session.commit()
             finally:
                 session.close()

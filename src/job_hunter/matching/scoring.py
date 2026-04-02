@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,25 @@ _DECISION_MAP: dict[str, Decision] = {
     "skip": Decision.SKIP,
     "review": Decision.REVIEW,
 }
+
+# ---------------------------------------------------------------------------
+# In-memory TTL cache for score_opportunities() results.
+# Market data changes only after explicit pipeline runs, so a 10-minute TTL
+# is a safety net — the primary invalidation is via invalidate_market_boost_cache().
+# ---------------------------------------------------------------------------
+_MARKET_BOOST_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_MARKET_BOOST_TTL = 600  # seconds
+
+
+def invalidate_market_boost_cache(candidate_key: str | None = None) -> None:
+    """Clear cached market boost data.
+
+    If *candidate_key* is ``None``, clear the entire cache.
+    """
+    if candidate_key is None:
+        _MARKET_BOOST_CACHE.clear()
+    else:
+        _MARKET_BOOST_CACHE.pop(candidate_key, None)
 
 
 def compute_score(
@@ -106,8 +126,15 @@ def compute_market_boost(
     if best_expl is None or best_overlap < 0.1:
         return neutral
 
-    # Compute opportunity score for the matched role
-    opps = score_opportunities(session, candidate_key)
+    # Compute opportunity score for the matched role (cached)
+    now = time.monotonic()
+    cached = _MARKET_BOOST_CACHE.get(candidate_key)
+    if cached and (now - cached[0]) < _MARKET_BOOST_TTL:
+        opps = cached[1]
+    else:
+        opps = score_opportunities(session, candidate_key)
+        _MARKET_BOOST_CACHE[candidate_key] = (now, opps)
+
     opp = next((o for o in opps if o["role_key"] == best_expl.role_key), None)
     if opp is None:
         return neutral
