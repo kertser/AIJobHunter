@@ -29,6 +29,7 @@ dependencies = [
     "python-jose[cryptography]>=3.3",
     "itsdangerous>=2.1",
     "browser-cookie3>=0.19",
+    "docker>=7.0",
 ]
 
 [project.scripts]

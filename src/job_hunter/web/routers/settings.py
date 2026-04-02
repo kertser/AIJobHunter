@@ -220,6 +220,52 @@ async def llm_status(request: Request):
     return await _aio.to_thread(_check)
 
 
+# ---------------------------------------------------------------------------
+# LLM container management (Docker sidecar control from web UI)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/settings/llm-container")
+async def llm_container_status(request: Request):
+    """Return the Docker container status for the LLM sidecar."""
+    import asyncio as _aio
+    from job_hunter.web.docker_ctl import container_status
+    return await _aio.to_thread(container_status)
+
+
+@router.post("/api/settings/llm-container/start")
+async def llm_container_start(request: Request):
+    """Start the LLM sidecar container."""
+    import asyncio as _aio
+    from job_hunter.web.docker_ctl import start_container
+    result = await _aio.to_thread(start_container)
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=500)
+    return result
+
+
+@router.post("/api/settings/llm-container/stop")
+async def llm_container_stop(request: Request):
+    """Stop the LLM sidecar container."""
+    import asyncio as _aio
+    from job_hunter.web.docker_ctl import stop_container
+    result = await _aio.to_thread(stop_container)
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=500)
+    return result
+
+
+@router.post("/api/settings/llm-container/restart")
+async def llm_container_restart(request: Request):
+    """Restart the LLM sidecar container."""
+    import asyncio as _aio
+    from job_hunter.web.docker_ctl import restart_container
+    result = await _aio.to_thread(restart_container)
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=500)
+    return result
+
+
 def _mask_key(key: str) -> str:
     if not key or len(key) < 8:
         return "not set" if not key else "****"

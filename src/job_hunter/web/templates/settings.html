@@ -69,6 +69,26 @@
       <div id="llm-sidecar-status" style="margin-bottom: 0.8rem; font-size: 0.9rem; padding: 0.5rem 0.7rem; border-radius: 6px; background: rgba(0,0,0,0.03);">
         <span id="llm-status-indicator">Checking LLM sidecar…</span>
       </div>
+
+      <!-- 🐳 Container Control Panel -->
+      <div id="llm-container-panel" style="margin-bottom: 0.8rem; padding: 0.7rem 0.8rem; border: 1px solid var(--pico-muted-border-color); border-radius: 6px; background: rgba(0,0,0,0.02);">
+        <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; flex-wrap: wrap;">
+          <span style="font-weight: 600; font-size: 0.88rem;">🐳 Container</span>
+          <span id="llm-container-badge" style="display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; background: #f3f4f6; color: #6b7280;">…</span>
+          <span id="llm-health-badge" style="display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.3px; background: #f3f4f6; color: #6b7280;"></span>
+          <span id="llm-container-uptime" style="font-size: 0.78rem; color: var(--pico-muted-color);"></span>
+        </div>
+        <div id="llm-container-buttons" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <button type="button" onclick="llmContainerAction('start')" id="llm-btn-start" class="outline" style="width: auto; font-size: 0.82rem; padding: 0.3rem 0.7rem;">▶️ Start</button>
+          <button type="button" onclick="llmContainerAction('stop')" id="llm-btn-stop" class="outline secondary" style="width: auto; font-size: 0.82rem; padding: 0.3rem 0.7rem;">⏹️ Stop</button>
+          <button type="button" onclick="llmContainerAction('restart')" id="llm-btn-restart" class="outline" style="width: auto; font-size: 0.82rem; padding: 0.3rem 0.7rem;">🔄 Restart</button>
+        </div>
+        <div id="llm-container-error" style="display: none; margin-top: 0.5rem; font-size: 0.8rem; color: #dc2626;"></div>
+        <div id="llm-container-unavailable" style="display: none; margin-top: 0.4rem; font-size: 0.82rem; color: var(--pico-muted-color);">
+          <em>Docker control not available — container management requires Docker socket access.</em>
+        </div>
+      </div>
+
       <div class="grid">
         <label>
           Server URL
@@ -87,7 +107,7 @@
         <div style="font-size: 0.84rem; color: var(--pico-muted-color); line-height: 1.6; margin-top: 0.5rem;">
           <ol style="padding-left: 1.2rem;">
             <li>Download a GGUF model: <code>.\scripts\download_model.ps1</code> (Windows) or <code>./scripts/download_model.sh</code> (Linux/Mac)</li>
-            <li>Start the LLM sidecar: <code>docker compose --profile local-llm up llm</code></li>
+            <li>The LLM container starts automatically with deployment. Use the controls above to manage it.</li>
             <li>Click "Check Connection" above to verify</li>
           </ol>
           <p style="margin-top: 0.5rem;"><strong>Recommended models:</strong></p>
@@ -738,7 +758,7 @@
       var isLocal = sel.value === 'local';
       document.getElementById('openai-settings').style.display = isLocal ? 'none' : '';
       document.getElementById('local-llm-settings').style.display = isLocal ? '' : 'none';
-      if (isLocal) checkLlmStatus();
+      if (isLocal) { checkLlmStatus(); refreshLlmContainerStatus(); }
     });
   })();
 
@@ -767,6 +787,110 @@
   // Auto-check on page load if local provider is selected
   if (document.getElementById('llm-provider-select') && document.getElementById('llm-provider-select').value === 'local') {
     checkLlmStatus();
+    refreshLlmContainerStatus();
+  }
+
+  /* ── LLM Container Management ──────────────────── */
+  function refreshLlmContainerStatus() {
+    fetch('/api/settings/llm-container')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var badge = document.getElementById('llm-container-badge');
+        var health = document.getElementById('llm-health-badge');
+        var uptime = document.getElementById('llm-container-uptime');
+        var buttons = document.getElementById('llm-container-buttons');
+        var unavail = document.getElementById('llm-container-unavailable');
+        var errEl = document.getElementById('llm-container-error');
+
+        errEl.style.display = 'none';
+
+        if (!data.available) {
+          badge.textContent = 'N/A';
+          badge.style.background = '#f3f4f6'; badge.style.color = '#6b7280';
+          health.textContent = '';
+          uptime.textContent = '';
+          buttons.style.display = 'none';
+          unavail.style.display = '';
+          return;
+        }
+
+        unavail.style.display = 'none';
+        buttons.style.display = '';
+
+        // State badge
+        var state = data.state || 'unknown';
+        badge.textContent = state;
+        if (state === 'running') {
+          badge.style.background = '#d1fae5'; badge.style.color = '#065f46';
+        } else if (state === 'exited' || state === 'stopped') {
+          badge.style.background = '#fee2e2'; badge.style.color = '#991b1b';
+        } else if (state === 'not_found') {
+          badge.textContent = 'not found';
+          badge.style.background = '#fef3c7'; badge.style.color = '#92400e';
+        } else {
+          badge.style.background = '#e0e7ff'; badge.style.color = '#4338ca';
+        }
+
+        // Health badge
+        var h = data.health || 'unknown';
+        if (h === 'healthy') {
+          health.textContent = '♥ healthy';
+          health.style.background = '#d1fae5'; health.style.color = '#065f46';
+        } else if (h === 'unhealthy') {
+          health.textContent = '✗ unhealthy';
+          health.style.background = '#fee2e2'; health.style.color = '#991b1b';
+        } else if (h === 'starting') {
+          health.textContent = '⏳ starting';
+          health.style.background = '#fef3c7'; health.style.color = '#92400e';
+        } else {
+          health.textContent = '';
+        }
+
+        // Uptime
+        uptime.textContent = data.uptime ? '⏱ ' + data.uptime : '';
+
+        // Enable/disable buttons based on state
+        document.getElementById('llm-btn-start').disabled = (state === 'running');
+        document.getElementById('llm-btn-stop').disabled = (state !== 'running');
+
+        if (data.error) {
+          errEl.textContent = data.error;
+          errEl.style.display = '';
+        }
+      })
+      .catch(function(err) {
+        var errEl = document.getElementById('llm-container-error');
+        errEl.textContent = 'Failed to check: ' + err;
+        errEl.style.display = '';
+      });
+  }
+
+  function llmContainerAction(action) {
+    var btn = document.getElementById('llm-btn-' + action);
+    var origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + action + '…';
+
+    fetch('/api/settings/llm-container/' + action, { method: 'POST' })
+      .then(function(r) {
+        return r.json().then(function(data) {
+          if (r.ok) {
+            showToast('✅ LLM container: ' + (data.message || action + ' done'));
+          } else {
+            showToast('❌ ' + (data.error || 'Failed'));
+          }
+        });
+      })
+      .catch(function(err) { showToast('Error: ' + err); })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = origText;
+        // Refresh status after a brief delay (container state change takes a moment)
+        setTimeout(function() {
+          refreshLlmContainerStatus();
+          checkLlmStatus();
+        }, 2000);
+      });
   }
 
   function sendTestEmail() {

@@ -22,7 +22,7 @@ Two pipelines sharing one SQLite DB:
 - **notifications/** — `email.py` with provider pattern: `BaseNotifier` (ABC) → `SmtpNotifier` (SMTP with optional auth, TLS, `last_error` diagnostics), `ResendNotifier` (API-key-based, free tier), `FakeNotifier` (tests); `build_notifier_from_settings()` auto-selects provider (Resend → SMTP fallback → None); `send_pipeline_summary()` and `send_test_email()` helpers
 - **scheduling/** — `scheduler.py`: `PipelineScheduler` wrapping APScheduler `AsyncIOScheduler`; cron trigger from `ScheduleConfig`; integrates with `TaskManager` (one-task-at-a-time); `wire(app_state)` + `start(config)` + `stop()` + `reschedule(config)`; records `ScheduleRunRecord` history to YAML; sends notification email on completion
 - **auth/** — `models.py` (`User` ORM — credentials, per-user settings overrides, email/notification prefs), `repo.py` (CRUD: `create_user`, `authenticate_user`, `update_user_profile`, `change_user_password`, `update_user_settings`, per-user data dirs), `security.py` (bcrypt password hashing, JWT access tokens via `python-jose`, standalone admin-password tokens); first registered user is auto-promoted to admin; per-user OpenAI keys, runtime flags, and email settings stored on the `User` row (NULL = inherit global)
-- **web/** — FastAPI + HTMX + Pico CSS; app factory in `app.py` (`app.state.dotenv_path` for settings persistence); login-required middleware (JWT cookie or `Authorization: Bearer` header); DI via `deps.py` (DB session, settings, task manager, `get_current_user`, `get_effective_settings` with per-user overlays, `require_admin` gate); routers under `web/routers/` (auth, account, admin, dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings, schedule); `TaskManager` in `task_manager.py` runs one background task at a time with SSE event broadcasting; run router includes interactive CAPTCHA solving during discover/pipeline tasks via `POST /api/run/captcha-click` with screenshot streaming and click queue (same pattern as login CAPTCHA); settings router includes LinkedIn session cookie management: guided connect wizard (open LinkedIn → copy `li_at` → paste), browser auto-capture via Playwright (`POST /api/settings/linkedin-browser-login` — headed browser on local machine), cookie paste (`POST /api/settings/cookies-paste`), cookie file upload/status/delete (`/api/settings/cookies*`), remote login (`/api/settings/linkedin-login`, `/api/settings/linkedin-verify`) with SSE progress streaming and two-phase verification-code flow via `asyncio.Future`, and checkpoint screenshot serving (`/api/settings/checkpoint-screenshot`) with frontend rendering via `SCREENSHOT:<filename>` SSE markers
+- **web/** — FastAPI + HTMX + Pico CSS; app factory in `app.py` (`app.state.dotenv_path` for settings persistence); login-required middleware (JWT cookie or `Authorization: Bearer` header); DI via `deps.py` (DB session, settings, task manager, `get_current_user`, `get_effective_settings` with per-user overlays, `require_admin` gate); routers under `web/routers/` (auth, account, admin, dashboard, jobs, onboarding, profiles, reports, resume_review, run, settings, schedule); `TaskManager` in `task_manager.py` runs one background task at a time with SSE event broadcasting; `docker_ctl.py` provides `DockerContainerControl` helpers (`available()`, `container_status()`, `start_container()`, `stop_container()`, `restart_container()`) for managing the LLM sidecar via Docker socket (soft dependency — gracefully degrades when Docker SDK or socket is unavailable); run router includes interactive CAPTCHA solving during discover/pipeline tasks via `POST /api/run/captcha-click` with screenshot streaming and click queue (same pattern as login CAPTCHA); settings router includes LinkedIn session cookie management: guided connect wizard (open LinkedIn → copy `li_at` → paste), browser auto-capture via Playwright (`POST /api/settings/linkedin-browser-login` — headed browser on local machine), cookie paste (`POST /api/settings/cookies-paste`), cookie file upload/status/delete (`/api/settings/cookies*`), remote login (`/api/settings/linkedin-login`, `/api/settings/linkedin-verify`) with SSE progress streaming and two-phase verification-code flow via `asyncio.Future`, checkpoint screenshot serving (`/api/settings/checkpoint-screenshot`) with frontend rendering via `SCREENSHOT:<filename>` SSE markers, and LLM container management (`/api/settings/llm-container`, `/api/settings/llm-container/start|stop|restart`) with Docker socket control and live status panel in the settings UI
 - **profile/** — `extract.py` (PDF text + LinkedIn scraping), `generator.py` (LLM profile generation)
 - **utils/** — `hashing.py` (SHA-256 job dedup), `logging.py` (namespaced logger setup), `rate_limit.py` (`RateLimiter` — token-bucket for browser automation), `retry.py` (`retry` decorator with exponential back-off, works for sync and async functions)
 - **llm_client.py** — Central factory for OpenAI-compatible LLM clients: `build_llm_client(settings)` returns an `openai.OpenAI` instance routed to either real OpenAI or a local llama-cpp-python sidecar based on `llm_provider`; `get_chat_model(settings)` returns the model name; `get_task_params(settings, task_name)` resolves per-task temperature/max_tokens (global defaults ← per-task override); `safe_json_parse(raw)` strips markdown fences and extracts JSON from local model responses; `is_local_provider(settings)` helper
@@ -43,7 +43,7 @@ Self-contained under `src/job_hunter/market/`. Detailed execution plan: **`agent
 - **market/graph/metrics.py** — `to_networkx(session)`, `export_graphml()`, `export_json()` (NetworkX export)
 - **market/graph/nx_export.py** — re-exports from `metrics.py`
 - **market/data/aliases.yml** — curated technology alias dictionary
-- Dependencies: `rapidfuzz>=3.0`, `networkx>=3.0`
+- Dependencies: `rapidfuzz>=3.0`, `networkx>=3.0`, `docker>=7.0`
 
 #### Implemented (Stage 2 — trends, roles, dialogue, web)
 
@@ -174,23 +174,26 @@ All contents of `data/` except `.gitkeep` are gitignored (including `data/users/
 
 ## Deployment
 
-`deploy.sh` in the project root handles full Docker deployment (Linux/macOS only — on Windows use Docker Desktop or WSL):
+`deploy.sh` in the project root handles full Docker deployment (Linux/macOS only — on Windows use Docker Desktop or WSL). The LLM sidecar is **always included** — the model is auto-downloaded on first deploy:
 
 ```bash
 chmod +x deploy.sh
-./deploy.sh              # app only — stop → pull → build → run on port 80
-./deploy.sh --with-llm   # app + local LLM sidecar (auto-downloads model if missing)
+./deploy.sh              # app + local LLM sidecar (always included)
 ```
 
-See also `docker-compose.yml` for compose-based deployment (works on all platforms) and `Dockerfile` for the image definition.
+The Docker socket is mounted into the app container for LLM container management from the web UI (Settings → LLM Provider → Container Control). See also `docker-compose.yml` for compose-based deployment (works on all platforms) and `Dockerfile` for the image definition.
 
 ### Local LLM Sidecar
 
-An optional llama-cpp-python container provides a self-hosted OpenAI-compatible API at `http://llm:8080/v1`. No API key required.
+The llama-cpp-python container provides a self-hosted OpenAI-compatible API at `http://llm:8080/v1`. No API key required. **The sidecar is always deployed** with the app — the model is auto-downloaded on first deploy, and the container starts automatically.
+
+**Web UI management:** Settings → LLM Provider → Local LLM → 🐳 Container panel provides Start / Stop / Restart buttons with live status (state, health, uptime). Requires Docker socket mount (included in `docker-compose.yml`).
+
+For local development without Docker:
 
 ```powershell
 .\scripts\download_model.ps1                           # download default GGUF model (~1.8 GB)
-docker compose --profile local-llm up llm              # start the sidecar
+docker compose up llm                                  # start the sidecar standalone
 ```
 
 Then set **LLM Provider → Local LLM** in the web Settings page, or:
