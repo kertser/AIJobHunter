@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
-from sqlalchemy import create_engine, event, func, select
+from sqlalchemy import create_engine, event, func, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -85,28 +85,103 @@ def _apply_user_filter(query, model, user_id: uuid.UUID | None):
 
 
 def upsert_job(session: Session, job: Job, *, user_id: uuid.UUID | None = None) -> Job:
-    """Insert a job or update it if a job with the same hash already exists."""
+    """Insert a job or update it if a duplicate is detected.
+
+    Three-tier dedup lookup (first match wins):
+
+    1. **By external_id** — same LinkedIn job ID, possibly reformatted title/company.
+    2. **By hash** — exact match on ``SHA-256(external_id|title|company)``.
+    3. **By normalised title + company** — catches jobs reposted with a new
+       ``external_id`` (same position, different posting).
+
+    When an existing row is updated and its ``hash`` changes, related
+    ``Score`` and ``ApplicationAttempt`` rows are cascade-updated so that
+    joins on ``job_hash`` keep working.
+    """
+    from job_hunter.utils.hashing import normalize_for_dedup
+
+    # --- Tier 1: same external_id ---
     existing = session.execute(
-        select(Job).where(Job.hash == job.hash)
+        select(Job).where(Job.external_id == job.external_id)
     ).scalar_one_or_none()
 
+    # --- Tier 2: same hash ---
+    if existing is None:
+        existing = session.execute(
+            select(Job).where(Job.hash == job.hash)
+        ).scalar_one_or_none()
+
+    # --- Tier 3: content-based (normalised title + company) ---
+    if existing is None:
+        norm_title, norm_company = normalize_for_dedup(job.title, job.company)
+        if norm_title and norm_company:
+            existing = session.execute(
+                select(Job).where(
+                    func.lower(func.trim(Job.title)) == norm_title,
+                    func.lower(func.trim(Job.company)) == norm_company,
+                )
+            ).scalar_one_or_none()
+
     if existing is not None:
+        old_hash = existing.hash
         updatable = (
             "title", "company", "location", "description_text",
-            "easy_apply", "status", "notes",
+            "easy_apply", "status", "notes", "external_id",
         )
         for attr in updatable:
             value = getattr(job, attr, None)
             if value is not None:
                 setattr(existing, attr, value)
+        # Recalculate hash after updating fields
+        from job_hunter.utils.hashing import job_hash as _calc_hash
+        new_hash = _calc_hash(
+            external_id=existing.external_id,
+            title=existing.title,
+            company=existing.company,
+        )
+        if new_hash != old_hash:
+            existing.hash = new_hash
+            _cascade_hash_update(session, old_hash, new_hash)
         session.flush()
         return existing
 
     if user_id is not None and job.user_id is None:
         job.user_id = user_id
     session.add(job)
-    session.flush()
+    try:
+        session.flush()
+    except Exception:
+        # Safety net: IntegrityError on external_id UNIQUE → fall back to update
+        session.rollback()
+        existing = session.execute(
+            select(Job).where(Job.external_id == job.external_id)
+        ).scalar_one_or_none()
+        if existing is not None:
+            return upsert_job(session, job, user_id=user_id)
+        raise
     return job
+
+
+def _cascade_hash_update(session: Session, old_hash: str, new_hash: str) -> None:
+    """Update ``job_hash`` in related tables when a Job's hash changes."""
+    session.execute(
+        update(Score).where(Score.job_hash == old_hash).values(job_hash=new_hash)
+    )
+    session.execute(
+        update(ApplicationAttempt)
+        .where(ApplicationAttempt.job_hash == old_hash)
+        .values(job_hash=new_hash)
+    )
+    # Also update market_events if the table exists
+    try:
+        from job_hunter.market.db_models import MarketEvent
+        session.execute(
+            update(MarketEvent)
+            .where(MarketEvent.job_hash == old_hash)
+            .values(job_hash=new_hash)
+        )
+    except Exception:
+        pass
 
 
 def get_jobs_by_status(

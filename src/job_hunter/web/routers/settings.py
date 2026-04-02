@@ -132,7 +132,8 @@ async def update_settings_api(body: SettingsUpdate, request: Request, session: S
     if user is not None:
         # Write per-user settings to the User row
         from job_hunter.auth.repo import update_user_settings
-        update_user_settings(session, user.id, **updates)
+        secret_key = getattr(request.app.state, "secret_key", "") or ""
+        update_user_settings(session, user.id, secret_key=secret_key, **updates)
     else:
         # Fallback: mutate global settings (legacy / CLI)
         s = request.app.state.settings

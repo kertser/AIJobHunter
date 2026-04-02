@@ -135,6 +135,8 @@ def get_effective_settings(request: Request) -> AppSettings:
     The User row stores personal overrides (API keys, runtime flags, etc.).
     Only non-None user values win over the global defaults — NULL columns
     mean "inherit from global AppSettings".
+
+    Sensitive fields are decrypted transparently using the app's secret key.
     """
     base = request.app.state.settings
     user = getattr(request.state, "user", None)
@@ -142,6 +144,10 @@ def get_effective_settings(request: Request) -> AppSettings:
         user = get_current_user_optional(request)
     if user is None:
         return base
+
+    secret_key: str = getattr(request.app.state, "secret_key", "") or ""
+
+    from job_hunter.auth.crypto import ENCRYPTED_FIELDS, decrypt_value
 
     # Collect only non-None overrides from the User row
     _OVERLAY_FIELDS = (
@@ -160,6 +166,9 @@ def get_effective_settings(request: Request) -> AppSettings:
             # For strings, only override if non-empty
             if isinstance(val, str) and not val:
                 continue
+            # Decrypt sensitive fields
+            if field in ENCRYPTED_FIELDS and isinstance(val, str) and secret_key:
+                val = decrypt_value(val, secret_key)
             overrides[field] = val
 
     if not overrides:

@@ -61,6 +61,13 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 pass
         app.state.secret_key = secret
 
+        # ── Encrypt any legacy plaintext secrets in the users table ──
+        try:
+            from job_hunter.auth.crypto import encrypt_legacy_secrets
+            encrypt_legacy_secrets(app.state.engine, secret)
+        except Exception:
+            pass
+
         # Register custom Jinja2 filters
         import markupsafe
         try:
@@ -148,6 +155,34 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         allow_methods=["POST", "OPTIONS"],
         allow_headers=["Content-Type"],
     )
+
+    # ── Early bot / scanner rejection middleware ──
+    # Block obviously malicious requests before they hit auth or any DB work.
+    # Starlette middleware is LIFO — this is added *after* login_required so
+    # it runs *before* it (outermost layer).
+    import re as _re
+
+    _ATTACK_PATH_RE = _re.compile(
+        r"(?:"
+        r"/vendor/|/phpunit/|/cgi-bin/|/\.env|/\.git/|/\.aws/"
+        r"|/wp-(?:admin|content|includes|login)"
+        r"|/ThinkPHP|\\think\\|/invokefunction"
+        r"|/boaform/|/shell|/eval-stdin"
+        r"|/containers/json"
+        r"|pearcmd|/moltbot/"
+        r"|%252e|%00|%ADd"
+        r")",
+        _re.IGNORECASE,
+    )
+
+    @app.middleware("http")
+    async def block_scanners_middleware(request, call_next):
+        path = request.url.path
+        query = str(request.url.query) if request.url.query else ""
+        target = path if not query else f"{path}?{query}"
+        if _ATTACK_PATH_RE.search(target):
+            return Response(status_code=404)
+        return await call_next(request)
 
     # ── Login-required middleware ──
     # Public paths that don't require authentication

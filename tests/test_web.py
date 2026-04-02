@@ -692,12 +692,18 @@ class TestOnboardingUpload:
                 data={"linkedin_url": "", "openai_api_key": "sk-test-key-12345"},
             )
             assert r.status_code == 202
-            # Verify key was saved to the User row
+            # Verify key was saved to the User row (encrypted at rest)
             from job_hunter.auth.repo import get_user_by_id
             from job_hunter.db.repo import make_session
             session = make_session(test_app.state.engine)
             user = get_user_by_id(session, test_app.state._test_user_id)
-            assert user.openai_api_key == "sk-test-key-12345"
+            # Raw DB value should be encrypted (Fernet token)
+            assert user.openai_api_key != "sk-test-key-12345"
+            assert user.openai_api_key.startswith("gAAAAA")
+            # Decrypting with the secret_key should give back the original
+            from job_hunter.auth.crypto import decrypt_value
+            decrypted = decrypt_value(user.openai_api_key, test_app.state.secret_key)
+            assert decrypted == "sk-test-key-12345"
             session.close()
 
     def test_onboarding_page_shows_api_key_field_when_not_set(self, test_app, tmp_path: Path) -> None:

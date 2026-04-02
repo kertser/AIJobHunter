@@ -72,10 +72,19 @@ def count_users(session: Session) -> int:
     return session.execute(select(func.count()).select_from(User)).scalar() or 0
 
 
-def update_user_settings(session: Session, user_id: uuid.UUID, **kwargs) -> User | None:
+def update_user_settings(
+    session: Session,
+    user_id: uuid.UUID,
+    *,
+    secret_key: str = "",
+    **kwargs,
+) -> User | None:
     """Update per-user settings fields on the User row.
 
     Only known settings columns are written; unknown keys are silently ignored.
+    Sensitive fields (API keys, passwords) are encrypted at rest when
+    *secret_key* is provided.
+
     Returns the updated User or None if not found.
     """
     _SETTINGS_FIELDS = {
@@ -88,8 +97,13 @@ def update_user_settings(session: Session, user_id: uuid.UUID, **kwargs) -> User
     user = get_user_by_id(session, user_id)
     if user is None:
         return None
+
+    from job_hunter.auth.crypto import ENCRYPTED_FIELDS, encrypt_value
+
     for key, value in kwargs.items():
         if key in _SETTINGS_FIELDS:
+            if key in ENCRYPTED_FIELDS and secret_key and isinstance(value, str) and value:
+                value = encrypt_value(value, secret_key)
             setattr(user, key, value)
     session.flush()
     return user
