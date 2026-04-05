@@ -1,58 +1,6 @@
 TODO:
-- Change OpenAI to local LLM
-General way:
-uv pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-
-wget -O model.gguf https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_S.gguf
-
-from llama_cpp import Llama
-import time
-import sys
-import os
-
-# Helper to silence the C++ level warnings during initialization
-class SuppressOutput:
-    def __enter__(self):
-        self._original_stderr = sys.stderr
-        sys.stderr = open(os.devnull, 'w')
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        sys.stderr.close()
-        sys.stderr = self._original_stderr
-
-print("Initializing model...")
-with SuppressOutput():
-    llm = Llama(
-        model_path="model.gguf",
-        n_ctx=1024, # Total context limit
-        n_threads=2,
-        n_batch=128,
-        use_mlock=True,
-        verbose=False,
-        logits_all=False
-    )
-
-def benchmark_cpu(prompt):
-    start_time = time.time()
-
-    formatted_prompt = f"<|start_header_id|>user<|end_header_id|>\n\n{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-
-    # Setting max_tokens to None allows the model to decide when to stop
-    output = llm(
-        formatted_prompt,
-        max_tokens=None,
-        stop=["<|eot_id|>", "<|end_of_text|>"]
-    )
-
-    end_time = time.time()
-
-    response_text = output["choices"][0]["text"]
-    tokens_generated = output["usage"]["completion_tokens"]
-    duration = end_time - start_time
-
-    print(f"Response: {response_text}")
-    print(f"\n--- Stats ---")
-    print(f"Speed: {tokens_generated / duration:.2f} tokens/sec")
-    print(f"Time: {duration:.2f}s")
-
-benchmark_cpu("What is the meaning of life?")
+- Since the pipeline processes are extremely slow, we have to implement async pipeline when the server is running (and the user is offline)
+- Add dropdown filters for Fit Range, Easy Apply (yes/no), etc.
+- Search for the company and study - what it actually does, what their history of hiring is, etc. to get a better understanding of the company and its culture
+- Add user's github to the profile and use it to get a better understanding of the user's coding skills and projects
+- disliked industry needs a better implementation (wrong understanding, use LLM)
